@@ -1,5 +1,23 @@
 # Implementation Plan
 
+## Replan (2026-03-08, Detail Modal Outside Click Close)
+
+- [x] `web_local/index.html` の詳細モーダル構造と既存 click ハンドラを確認する
+- [x] 画像本体とサイドバーでは閉じず、何もない領域のクリックでだけ閉じるように修正する
+- [x] 差分を確認し、review を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `web_local/index.html` の詳細モーダル click ハンドラを条件付きに変更し、オーバーレイ本体か画像エリアの余白を押したときだけ `closeModal()` が走るようにした
+  - 画像エリア全体の `stopPropagation()` は削除し、画像本体クリックでは `event.target` が `#detailImage` になるため閉じない挙動を維持した
+- 検証:
+  - `git diff -- web_local/index.html tasks/todo.md` で変更範囲がイベント処理と作業記録に限定されていることを確認
+  - `sed -n '1360,1374p' web_local/index.html` で、サイドバーは従来どおり伝播停止しつつ、モーダル外側だけで close 判定することを確認
+- 未実施:
+  - ブラウザでの実画面クリック確認
+
 ## Replan (2026-03-08, Predicted Tags Visual Tone)
 
 - [x] `web_local/index.html` の Predicted Tags 描画位置と既存スタイルを確認する
