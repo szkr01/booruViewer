@@ -32,6 +32,21 @@ class SearchService:
             )
         return entries
 
+    def _to_ranked_entries(self, ranked_rows: Iterable[tuple[dict, float]]) -> list[ImageEntry]:
+        entries: list[ImageEntry] = []
+        for row, score in ranked_rows:
+            post_id = int(row["id"])
+            entries.append(
+                ImageEntry(
+                    id=str(post_id),
+                    url=build_post_url(post_id),
+                    media_url=build_cdn_url(row),
+                    rating=int(row["rating"]),
+                    score=float(score),
+                )
+            )
+        return entries
+
     def _extract_post_id_query(self, query_text: str | None) -> int | None:
         if not query_text:
             return None
@@ -133,21 +148,17 @@ class SearchService:
 
         page_pairs = pairs[offset: offset + limit]
         ids = [pid for pid, _ in page_pairs]
-        score_map = {pid: score for pid, score in page_pairs}
 
-        # Primary path: faiss IDs are post IDs
-        row_map = db.get_posts_by_ids(ids)
-        if row_map:
-            ordered_rows = [row_map[i] for i in ids if i in row_map]
-            results = self._to_entries(ordered_rows, score_map=score_map)
+        if vector_store.search_id_mode == "post_id":
+            row_map = db.get_posts_by_ids(ids)
+            ranked_rows = [(row_map[id_value], score) for id_value, score in page_pairs if id_value in row_map]
+            results = self._to_ranked_entries(ranked_rows)
             if results:
                 return results, "vector", "faiss_match_idmap"
-
-        # Fallback path: legacy indices may return vec_idx (0..N-1) instead of post ID
-        vec_row_map = db.get_posts_by_vec_idxs(ids)
-        if vec_row_map:
-            ordered_rows = [vec_row_map[i] for i in ids if i in vec_row_map]
-            results = self._to_entries(ordered_rows, score_map=score_map)
+        else:
+            vec_row_map = db.get_posts_by_vec_idxs(ids)
+            ranked_rows = [(vec_row_map[id_value], score) for id_value, score in page_pairs if id_value in vec_row_map]
+            results = self._to_ranked_entries(ranked_rows)
             if results:
                 return results, "vector", "faiss_match_vecidx"
 

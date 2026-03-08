@@ -1,4 +1,104 @@
+# Replan (2026-03-09, app.bat Missing Dependency Startup Failure)
+
+- [x] `app.bat` と依存定義を確認し、`httpx` 未検出の原因を特定する
+- [x] 起動経路を修正し、未同期環境でも依存を解決してから起動するようにする
+- [x] 修正後に import 段階を再検証し、review を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - [app.bat](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app.bat#L1) の `uv run --no-sync` を `uv run` に変更し、起動時に lock/依存を見て必要なパッケージを自動同期するよう修正
+- 原因:
+  - 依存定義には [pyproject.toml](/mnt/c/Users/korag/Documents/GitHub/booruViewer/pyproject.toml#L1) / [requirements.txt](/mnt/c/Users/korag/Documents/GitHub/booruViewer/requirements.txt#L1) の両方で `httpx` が含まれていた
+  - しかし `app.bat` は `--no-sync` を指定していたため、`.venv` が未同期または壊れている状態でもそのまま起動し、`ModuleNotFoundError: No module named 'httpx'` で落ちていた
+- 検証:
+  - `./.venv/Scripts/python.exe -c "import importlib.util; print(importlib.util.find_spec('httpx'))"` では修正前に `None` を確認
+- `cmd.exe /c app.bat` 実行で `Installed 48 packages in 11.23s` を確認し、少なくとも `httpx` import 前の失敗は解消
+
+## Replan (2026-03-09, Safe Search ID Mode Mapping Without Touching data)
+
+- [x] `vector_store` に FAISS ID モード検出を持たせ、起動後に `post_id` / `vec_idx` を固定できるようにする
+- [x] `search_service` をモード固定の DB 解決へ変更し、1検索内で `id` と `vec_idx` を混在解釈しないようにする
+- [x] 単体テストを追加し、衝突領域・スコア維持・フォールバック抑止を検証する
+- [x] レビュー欄を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - [app/vector_store.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/vector_store.py#L19) に `search_id_mode` と `_detect_id_mode()` を追加し、読み込んだ index が `post_id` / `vec_idx` のどちらを返すかをロード時に固定するよう変更
+  - [app/services/search_service.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/services/search_service.py#L148) をモード固定解決へ変更し、`post_id` モードでは `get_posts_by_ids()` のみ、`vec_idx` モードでは `get_posts_by_vec_idxs()` のみを使うよう整理
+  - `vec_idx` モードでも Faiss のスコアが失われないよう、ranked row から直接 `ImageEntry` を組み立てる経路へ変更
+  - [app/main.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/main.py#L77) の起動ログに `index_id_mode` を追加
+- 検証:
+  - `python3 -m compileall app tests` 成功
+  - `python3 - <<'PY' ... unittest ... PY` で `numpy/faiss/PIL` を fake module に差し替えた軽量テストランナーを使い、`tests.test_search_service tests.test_build_state tests.test_gap_finder` 成功
+- 制約:
+  - `data/*` は未変更
+  - index 再構築や DB マイグレーションは未実施
+  - `uv run --no-sync ...` は WSL から Windows `.venv` の `.venv/Scripts` を触ろうとして `os error 5` で失敗したため、今回の単体テストはシステム Python 上の依存差し替えで代替
+
 # Implementation Plan
+
+## Replan (2026-03-09, DB ID Management Audit for f04cfec)
+
+- [x] `f04cfec` と親コミットの `database/build_state/sync_posts/gap_finder` を比較し、ID管理に関わる変更点を列挙する
+- [x] `DB の id` が何を指すかをコード上で特定し、変更前後で管理方式がどう変わったかを整理する
+- [x] 破壊ポイントと影響をまとめて review を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 変更点:
+  - `posts.id` の DB スキーマ自体は不変で、[app/database.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/database.py#L31) の `id INTEGER PRIMARY KEY` はそのまま
+  - 破壊されたのは `sync_posts` が「どの `id` 帯を未取得として扱うか」を管理する state で、親コミットの単一 `sync_cursor_id` 方式から、[app/build_state.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/build_state.py#L41) の `pending_ranges + probe_resume_id` 方式へ置き換わった
+  - `f04cfec` で [app/database.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/database.py#L153) と [app/database.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/database.py#L162) が追加され、collector はページ内 `existing_ids()` 判定ではなく、DB 上の前後既存 `id` を使って gap を推定するよう変わった
+- 破壊ポイント:
+  - 旧 state の `sync_cursor_id` は「次に API から下方向へ走査するカーソル」だったが、[app/build_state.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/build_state.py#L86) でその値を新 state の `probe_resume_id` に流用している
+  - しかし新実装の `probe_resume_id` は「この `id` 以下から gap 探索を再開する上限」で意味が違うため、旧 state を持ったまま更新すると、その cursor より新しい側の未検出 gap を永続的に探索しなくなる
+  - さらに [app/sync_posts.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/sync_posts.py#L133) の `latest_head_id - db_max_id >= sync_gap_threshold` 条件により、既定値 `400` 未満の最新投稿は gap と見なされず、DB の `max(id)` が最新 head に追従しなくなった
+- 影響:
+  - アップグレード前の `build_state.json` を引き継ぐと、`sync_cursor_id` が低い環境ほど、新しい `id` 帯の欠損を見落としやすい
+  - 新規投稿も `400` 件たまるまで collector 対象にならないため、「DB は最新 `id` を即時反映する」という以前の前提が崩れる
+  - つまり `id` の定義は不変だが、`id` の追跡・再開・欠損補完ポリシーがこのコミットで別物に変わっている
+- 検証:
+  - `git show f04cfecde70565a99aaa0739249ef811ae63834b^:app/sync_posts.py`
+  - `git show f04cfecde70565a99aaa0739249ef811ae63834b:app/sync_posts.py`
+  - `git show f04cfecde70565a99aaa0739249ef811ae63834b^:app/build_state.py`
+  - `git show f04cfecde70565a99aaa0739249ef811ae63834b:app/build_state.py`
+  - `git diff f04cfecde70565a99aaa0739249ef811ae63834b^ f04cfecde70565a99aaa0739249ef811ae63834b -- app/database.py app/build_state.py app/sync_posts.py app/gap_finder.py README.md config.json`
+
+## Replan (2026-03-09, Search Regression Commit Audit)
+
+- [x] `search_service` / `vector_store` / `database` / `build_index` の履歴を比較し、検索品質に影響する変更点を列挙する
+- [x] `正規化` と `Faiss ID -> DB` 解決ロジックが入ったコミットを特定し、どの時点で挙動が壊れたかをまとめる
+- [x] 必要なら該当コミットの差分を抜き出して、次の修正方針に直結する形で review を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 調査結果:
+  - `app/services/search_service.py` / `app/vector_store.py` / `app/build_index.py` / `app/database.py` の検索系ロジックはすべて初回コミット `fbc82ab` (`APP`, 2026-03-08 09:29:24 +0900) で追加された
+  - その後の `f04cfec` は `app/database.py` に gap 探索用メソッドを追加しただけで、検索ロジック自体には触れていない
+- 壊れている点:
+  - [app/services/search_service.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/services/search_service.py#L87) のクエリ画像特徴の L2 正規化
+  - [app/vector_store.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/vector_store.py#L50) の検索直前クエリ正規化
+  - [app/services/search_service.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/services/search_service.py#L139) から [app/services/search_service.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/services/search_service.py#L152) の `post_id` / `vec_idx` 二択解決
+  - [app/build_index.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/build_index.py#L208) から [app/build_index.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/build_index.py#L214) の `id_mode` 分岐により、index が返す ID の意味を 1 つに固定しない設計
+- 結論:
+  - この repo の git 履歴上は「特定の後続コミットで壊れた」のではなく、検索系は `fbc82ab` の導入時点から現在の問題を抱えていた
+  - `500件未満` と `全く違う画像` は別症状だが、どちらも同じ初回コミットに導入された別々の不具合として追える
+- 検証:
+  - `git log --oneline -- app/services/search_service.py app/vector_store.py app/build_index.py app/database.py`
+  - `git log -S "normalize_L2" --oneline -- app/vector_store.py app/build_index.py app/services/search_service.py`
+  - `git log -S "faiss_match_idmap" --oneline -- app/services/search_service.py`
+  - `git show fbc82ab:app/services/search_service.py`
+  - `git show fbc82ab:app/vector_store.py`
+  - `git show fbc82ab:app/build_index.py`
+  - `git show f04cfecde70565a99aaa0739249ef811ae63834b -- app/services/search_service.py app/vector_store.py app/build_index.py app/database.py`
+  - `git show f04cfecde70565a99aaa0739249ef811ae63834b:app/services/search_service.py`
+  - `git show f04cfecde70565a99aaa0739249ef811ae63834b^:app/services/search_service.py`
 
 ## Replan (2026-03-08, Detail Modal Outside Click Close)
 

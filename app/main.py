@@ -75,8 +75,9 @@ async def lifespan(app: FastAPI):
     vector_store.load()
     tag_engine.load()
     logger.info(
-        "startup runtime index_ready=%s vectors_shape=%s model_loaded=%s",
+        "startup runtime index_ready=%s index_id_mode=%s vectors_shape=%s model_loaded=%s",
         vector_store.is_ready(),
+        vector_store.search_id_mode,
         None if vector_store.vectors_raw is None else tuple(vector_store.vectors_raw.shape),
         tag_engine.model is not None,
     )
