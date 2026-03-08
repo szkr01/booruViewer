@@ -36,6 +36,8 @@ class Settings:
     ingest_download_workers_min: int
     ingest_download_workers_max: int
     ingest_download_autotune_interval: int
+    ingest_preprocess_workers: int
+    ingest_preprocess_queue_factor: int
     ingest_embed_batch_size: int
     ingest_embed_max_wait_ms: float
     ingest_embed_autocast: bool
@@ -95,6 +97,8 @@ class SettingsLoader:
         ingest_download_workers_min = int(config.get("ingest_download_workers_min", 2))
         ingest_download_workers_max = int(config.get("ingest_download_workers_max", 16))
         ingest_download_autotune_interval = int(config.get("ingest_download_autotune_interval", 64))
+        ingest_preprocess_workers = int(config.get("ingest_preprocess_workers", max(1, (os.cpu_count() or 4) // 2)))
+        ingest_preprocess_queue_factor = int(config.get("ingest_preprocess_queue_factor", 4))
         ingest_embed_batch_size = int(config.get("ingest_embed_batch_size", 16))
         ingest_embed_max_wait_ms = float(config.get("ingest_embed_max_wait_ms", 15.0))
         ingest_embed_autocast = bool(config.get("ingest_embed_autocast", True))
@@ -138,6 +142,8 @@ class SettingsLoader:
             ingest_download_workers_min=ingest_download_workers_min,
             ingest_download_workers_max=ingest_download_workers_max,
             ingest_download_autotune_interval=ingest_download_autotune_interval,
+            ingest_preprocess_workers=ingest_preprocess_workers,
+            ingest_preprocess_queue_factor=ingest_preprocess_queue_factor,
             ingest_embed_batch_size=ingest_embed_batch_size,
             ingest_embed_max_wait_ms=ingest_embed_max_wait_ms,
             ingest_embed_autocast=ingest_embed_autocast,

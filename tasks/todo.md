@@ -1,5 +1,28 @@
 # Implementation Plan
 
+## Replan (2026-03-08, Ingest Preprocess Pipeline)
+
+- [x] `TagEngine` を前処理 API と forward API に分割し、前処理済み tensor を直接 forward できるようにする
+- [x] ingest を download -> preprocess -> embed の3段パイプラインへ変更する
+- [x] 前処理 worker 数とキュー深さを設定化し、README に反映する
+- [x] 静的検証を実施し、レビュー欄に結果を記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `app/tag_engine.py` に `preprocess_image(s)` / `extract_feature_tensors(_with_stats)` を追加し、画像前処理と GPU forward を分離
+  - `app/ingest_posts.py` に `PreparedPost` を追加し、前処理済み tensor とメタデータをまとめて保持するよう変更
+  - `process_posts_with_stats()` を `download pool -> preprocess threads -> embed thread` の3段パイプラインへ変更
+  - `build_rows_from_prepared_batch()` で前処理済み tensor を stack して forward し、前処理時間は各 worker 側の時間も含めて集計するよう調整
+  - `config.json` / `app/config.py` / `README.md` に `ingest_preprocess_workers` と `ingest_preprocess_queue_factor` を追加
+- 検証:
+  - `python3 -m compileall app` 成功
+  - `python3 -m py_compile app/ingest_posts.py app/tag_engine.py app/sync_posts.py app/config.py` 成功
+- 未実施:
+  - 実 GPU 環境での波形確認
+  - 次ページ prefetch の追加
+
 ## Replan (2026-03-08, Ingest GPU Batch Throughput)
 
 - [x] `TagEngine` にバッチ推論 API を追加し、単発推論の内部実装を共有化する

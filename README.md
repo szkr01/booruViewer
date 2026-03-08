@@ -33,6 +33,8 @@ setup.bat
 - `ingest_batch_size`: 収集済み行を parquet へ flush する単位。GPU 推論バッチサイズではありません
 - `ingest_roll_max_rows`, `ingest_roll_max_mib`: 収集parquetのローテーション条件
 - `ingest_download_workers*`: ダウンロード並列数と自動調整範囲
+- `ingest_preprocess_workers`: ダウンロード後の画像前処理を並列実行する worker 数
+- `ingest_preprocess_queue_factor`: download/preprocess/embed 間キューの深さ係数
 - `ingest_embed_batch_size`: 画像特徴抽出を GPU へまとめて投げる推論バッチサイズ
 - `ingest_embed_max_wait_ms`: 推論キューを時間で flush する上限待ち時間
 - `ingest_embed_autocast`: CUDA 推論時に autocast(fp16) を使うか

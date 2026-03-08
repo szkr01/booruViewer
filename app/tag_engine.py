@@ -183,9 +183,38 @@ class TagEngine:
         if self.model is None or not images:
             return None
 
+        batch, preprocess_sec = self.preprocess_images_with_stats(images)
+        if batch is None:
+            return None
+        result = self.extract_feature_tensors_with_stats(batch)
+        if result is None:
+            return None
+        result.preprocess_sec = preprocess_sec
+        return result
+
+    def preprocess_image(self, img: Image.Image) -> torch.Tensor:
+        return self._preprocess_image(img)
+
+    def preprocess_images(self, images: list[Image.Image]) -> torch.Tensor | None:
+        batch, _ = self.preprocess_images_with_stats(images)
+        return batch
+
+    def preprocess_images_with_stats(self, images: list[Image.Image]) -> tuple[torch.Tensor | None, float]:
+        if not images:
+            return None, 0.0
         t_pre0 = perf_counter()
         batch = torch.stack([self._preprocess_image(img) for img in images], dim=0)
-        preprocess_sec = perf_counter() - t_pre0
+        return batch, perf_counter() - t_pre0
+
+    def extract_feature_tensors(self, batch: torch.Tensor) -> np.ndarray | None:
+        result = self.extract_feature_tensors_with_stats(batch)
+        if result is None:
+            return None
+        return result.features
+
+    def extract_feature_tensors_with_stats(self, batch: torch.Tensor) -> FeatureBatchResult | None:
+        if self.model is None or batch.numel() <= 0:
+            return None
 
         t_transfer0 = perf_counter()
         batch = batch.to(self.device, non_blocking=self.device.type == "cuda")
@@ -205,7 +234,7 @@ class TagEngine:
         features = feat.detach().float().cpu().numpy().astype(np.float32, copy=False)
         return FeatureBatchResult(
             features=features,
-            preprocess_sec=preprocess_sec,
+            preprocess_sec=0.0,
             transfer_sec=transfer_sec,
             forward_sec=forward_sec,
         )

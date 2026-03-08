@@ -24,6 +24,8 @@
   "ingest_download_workers_min": 2,
   "ingest_download_workers_max": 32,
   "ingest_download_autotune_interval": 64,
+  "ingest_preprocess_workers": 8,
+  "ingest_preprocess_queue_factor": 4,
   "ingest_embed_batch_size": 32,
   "ingest_embed_max_wait_ms": 15.0,
   "ingest_embed_autocast": true,

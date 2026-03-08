@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 import re
 import time
 import io
@@ -10,7 +11,6 @@ from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from time import perf_counter
 
 import httpx
@@ -18,6 +18,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from PIL import Image
+import torch
 
 from .config import settings
 from .tag_engine import tag_engine
@@ -68,6 +69,16 @@ class DownloadedPost:
     comp: tuple[int, int, int, int, int] | None
     image: Image.Image | None
     stats: BuildRowStats
+
+
+@dataclass
+class PreparedPost:
+    post_id: int
+    rating: int
+    comp: tuple[int, int, int, int, int]
+    tensor: torch.Tensor
+    stats: BuildRowStats
+    preprocess_sec: float
 
 
 class AdaptiveDownloadController:
@@ -324,37 +335,49 @@ def build_row_from_post_with_stats(client: httpx.Client, post: dict[str, Any]) -
     downloaded = download_post_with_stats(client, post)
     if downloaded.image is None:
         return None, downloaded.stats
-    return build_rows_from_downloaded_batch([downloaded])[0]
+    prepared = prepare_downloaded_post(downloaded)
+    if prepared is None:
+        return None, downloaded.stats
+    _post_id, row, stats = build_rows_from_prepared_batch([prepared])[0]
+    return row, stats
 
 
-def _embed_downloaded_batch(downloaded_batch: list[DownloadedPost]) -> tuple[np.ndarray | None, float, float, float]:
-    if not downloaded_batch:
+def prepare_downloaded_post(downloaded: DownloadedPost) -> PreparedPost | None:
+    if downloaded.image is None or downloaded.comp is None:
+        return None
+    t0 = perf_counter()
+    tensor = tag_engine.preprocess_image(downloaded.image)
+    return PreparedPost(
+        post_id=downloaded.post_id,
+        rating=downloaded.rating,
+        comp=downloaded.comp,
+        tensor=tensor,
+        stats=downloaded.stats,
+        preprocess_sec=perf_counter() - t0,
+    )
+
+
+def _embed_prepared_batch(prepared_batch: list[PreparedPost]) -> tuple[np.ndarray | None, float, float, float]:
+    if not prepared_batch:
         return None, 0.0, 0.0, 0.0
-    images = [item.image for item in downloaded_batch if item.image is not None]
-    if len(images) != len(downloaded_batch):
-        return None, 0.0, 0.0, 0.0
-    result = tag_engine.extract_image_features_with_stats(images)
+    tensors = [item.tensor for item in prepared_batch]
+
+    t_pre0 = perf_counter()
+    stacked = torch.stack(tensors, dim=0)
+    preprocess_sec = sum(item.preprocess_sec for item in prepared_batch) + (perf_counter() - t_pre0)
+    result = tag_engine.extract_feature_tensors_with_stats(stacked)
     if result is None:
         return None, 0.0, 0.0, 0.0
-    return result.features, result.preprocess_sec, result.forward_sec, result.transfer_sec
+    return result.features, preprocess_sec, result.forward_sec, result.transfer_sec
 
 
-def build_rows_from_downloaded_batch(
-    downloaded_batch: list[DownloadedPost],
+def build_rows_from_prepared_batch(
+    prepared_batch: list[PreparedPost],
 ) -> list[tuple[int, IngestRow | None, BuildRowStats]]:
-    if not downloaded_batch:
+    if not prepared_batch:
         return []
-
-    valid_batch = [item for item in downloaded_batch if item.image is not None and item.comp is not None]
-    invalid_results: list[tuple[int, IngestRow | None, BuildRowStats]] = []
-    for item in downloaded_batch:
-        if item.image is None or item.comp is None:
-            invalid_results.append((item.post_id, None, item.stats))
-
-    feats, preprocess_sec, forward_sec, transfer_sec = _embed_downloaded_batch(valid_batch)
-    batch_size = len(valid_batch)
-    if batch_size <= 0:
-        return invalid_results
+    feats, preprocess_sec, forward_sec, transfer_sec = _embed_prepared_batch(prepared_batch)
+    batch_size = len(prepared_batch)
 
     per_item_preprocess = preprocess_sec / batch_size
     per_item_forward = forward_sec / batch_size
@@ -363,7 +386,7 @@ def build_rows_from_downloaded_batch(
     results: list[tuple[int, IngestRow | None, BuildRowStats]] = []
 
     if feats is None or feats.shape[0] != batch_size:
-        for item in valid_batch:
+        for item in prepared_batch:
             results.append(
                 (
                     item.post_id,
@@ -383,9 +406,9 @@ def build_rows_from_downloaded_batch(
                     ),
                 )
             )
-        return invalid_results + results
+        return results
 
-    for item, feat in zip(valid_batch, feats, strict=True):
+    for item, feat in zip(prepared_batch, feats, strict=True):
         emb = np.asarray(feat, dtype=np.float32).reshape(-1)
         if emb.shape[0] != settings.embedding_dim:
             results.append(
@@ -430,7 +453,7 @@ def build_rows_from_downloaded_batch(
                 ),
             )
         )
-    return invalid_results + results
+    return results
 
 
 def download_post_with_stats(client: httpx.Client, post: dict[str, Any]) -> DownloadedPost:
@@ -514,12 +537,23 @@ def process_posts_with_stats(
         return []
     downloader = controller or AdaptiveDownloadController()
     results: list[tuple[int, IngestRow | None, BuildRowStats]] = []
+    preprocess_workers = max(
+        1,
+        int(
+            getattr(
+                settings,
+                "ingest_preprocess_workers",
+                min(max(1, (os.cpu_count() or 4) // 2), max(1, len(posts))),
+            )
+        ),
+    )
     embed_batch_size = max(1, int(getattr(settings, "ingest_embed_batch_size", 1)))
     embed_max_wait_sec = max(0.0, float(getattr(settings, "ingest_embed_max_wait_ms", 0.0))) / 1000.0
-    embed_queue_max = max(embed_batch_size * 4, 8)
-    embed_input: queue.Queue[DownloadedPost | None] = queue.Queue(maxsize=embed_queue_max)
-    embed_output: queue.SimpleQueue[tuple[int, IngestRow | None, BuildRowStats]] = queue.SimpleQueue()
-    embed_error: list[BaseException] = []
+    queue_factor = max(1, int(getattr(settings, "ingest_preprocess_queue_factor", 4)))
+    downloaded_queue: queue.Queue[DownloadedPost | None] = queue.Queue(maxsize=max(embed_batch_size * queue_factor, 8))
+    prepared_queue: queue.Queue[PreparedPost | None] = queue.Queue(maxsize=max(embed_batch_size * queue_factor, 8))
+    final_output: queue.SimpleQueue[tuple[int, IngestRow | None, BuildRowStats]] = queue.SimpleQueue()
+    pipeline_error: list[BaseException] = []
     download_thread_state = threading.local()
     media_clients: list[httpx.Client] = []
     media_clients_lock = threading.Lock()
@@ -527,14 +561,14 @@ def process_posts_with_stats(
     def flush_results() -> None:
         while True:
             try:
-                item = embed_output.get_nowait()
+                item = final_output.get_nowait()
             except queue.Empty:
                 break
             downloader.observe(item[2])
             results.append(item)
 
     def embed_worker() -> None:
-        pending: list[DownloadedPost] = []
+        pending: list[PreparedPost] = []
         first_pending_at: float | None = None
 
         def flush_pending() -> None:
@@ -542,8 +576,8 @@ def process_posts_with_stats(
             if not pending:
                 first_pending_at = None
                 return
-            for item in build_rows_from_downloaded_batch(list(pending)):
-                embed_output.put(item)
+            for item in build_rows_from_prepared_batch(list(pending)):
+                final_output.put(item)
             pending.clear()
             first_pending_at = None
 
@@ -553,7 +587,7 @@ def process_posts_with_stats(
                 if pending and embed_max_wait_sec > 0 and first_pending_at is not None:
                     timeout = max(0.0, embed_max_wait_sec - (perf_counter() - first_pending_at))
                 try:
-                    item = embed_input.get(timeout=timeout)
+                    item = prepared_queue.get(timeout=timeout)
                 except queue.Empty:
                     flush_pending()
                     continue
@@ -566,10 +600,52 @@ def process_posts_with_stats(
                 if len(pending) >= embed_batch_size:
                     flush_pending()
         except BaseException as exc:
-            embed_error.append(exc)
+            pipeline_error.append(exc)
 
-    worker = threading.Thread(target=embed_worker, name="ingest-embed", daemon=True)
-    worker.start()
+    def preprocess_worker() -> None:
+        try:
+            while True:
+                item = downloaded_queue.get()
+                if item is None:
+                    return
+                try:
+                    prepared = prepare_downloaded_post(item)
+                except Exception:
+                    final_output.put(
+                        (
+                            item.post_id,
+                            None,
+                            BuildRowStats(
+                                False,
+                                item.stats.bytes_downloaded,
+                                item.stats.download_sec,
+                                item.stats.decode_sec,
+                                0.0,
+                                0.0,
+                                0.0,
+                                0.0,
+                                item.stats.total_sec,
+                                0,
+                                "preprocess_failed",
+                            ),
+                        )
+                    )
+                    continue
+                if prepared is None:
+                    final_output.put((item.post_id, None, item.stats))
+                    continue
+                prepared_queue.put(prepared)
+        except BaseException as exc:
+            pipeline_error.append(exc)
+
+    embed_thread = threading.Thread(target=embed_worker, name="ingest-embed", daemon=True)
+    embed_thread.start()
+    preprocess_threads = [
+        threading.Thread(target=preprocess_worker, name=f"ingest-preprocess-{idx}", daemon=True)
+        for idx in range(preprocess_workers)
+    ]
+    for thread in preprocess_threads:
+        thread.start()
 
     def init_download_worker() -> None:
         media_client = make_media_client()
@@ -597,16 +673,20 @@ def process_posts_with_stats(
                 flush_results()
                 continue
 
-            embed_input.put(downloaded)
+            downloaded_queue.put(downloaded)
             flush_results()
 
-    embed_input.put(None)
-    worker.join()
+    for _ in range(preprocess_workers):
+        downloaded_queue.put(None)
+    for thread in preprocess_threads:
+        thread.join()
+    prepared_queue.put(None)
+    embed_thread.join()
     flush_results()
     for media_client in media_clients:
         media_client.close()
-    if embed_error:
-        raise RuntimeError("embed worker failed") from embed_error[0]
+    if pipeline_error:
+        raise RuntimeError("ingest pipeline worker failed") from pipeline_error[0]
     return results
 
 
