@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import time
 import io
+import queue
+import threading
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from dataclasses import dataclass
@@ -76,6 +78,8 @@ class AdaptiveDownloadController:
         self.current_workers = min(self.max_workers, max(self.min_workers, initial))
         self._window: list[BuildRowStats] = []
         self._interval = max(1, int(settings.ingest_download_autotune_interval))
+        self._prev_download_avg: float | None = None
+        self._prev_throughput: float | None = None
 
     def observe(self, stats: BuildRowStats) -> None:
         self._window.append(stats)
@@ -89,20 +93,35 @@ class AdaptiveDownloadController:
         download_avg = sum(item.download_sec for item in batch) / total
         embed_avg = sum(item.embed_sec for item in batch) / total
         failure_rate = sum(1 for item in batch if not item.ok) / total
+        download_total = sum(item.download_sec for item in batch)
+        throughput = total / max(download_total, 1e-9)
+        prev_download_avg = self._prev_download_avg
+        prev_throughput = self._prev_throughput
+        self._prev_download_avg = download_avg
+        self._prev_throughput = throughput
 
         target = self.current_workers
         if blocked > 0:
             target = max(self.min_workers, self.current_workers - max(1, blocked))
         elif failure_rate > 0.25:
             target = max(self.min_workers, self.current_workers - 1)
-        elif download_avg > max(embed_avg * 1.25, 0.05):
-            target = min(self.max_workers, self.current_workers + 1)
+        else:
+            worsened_download = prev_download_avg is not None and download_avg > (prev_download_avg * 1.08)
+            worsened_throughput = prev_throughput is not None and throughput < (prev_throughput * 0.92)
+            improved_download = prev_download_avg is None or download_avg < (prev_download_avg * 0.98)
+            improved_throughput = prev_throughput is None or throughput > (prev_throughput * 1.03)
+
+            if worsened_download and worsened_throughput:
+                target = max(self.min_workers, self.current_workers - 1)
+            elif download_avg > max(embed_avg * 1.25, 0.05) and improved_download and improved_throughput:
+                target = min(self.max_workers, self.current_workers + 1)
 
         if target != self.current_workers:
             print(
                 "ingest autotune: "
                 f"workers={self.current_workers}->{target} blocked={blocked}/{total} "
-                f"download_avg_ms={download_avg*1000:.1f} embed_avg_ms={embed_avg*1000:.1f}"
+                f"download_avg_ms={download_avg*1000:.1f} embed_avg_ms={embed_avg*1000:.1f} "
+                f"dl_img_s={throughput:.2f}"
             )
             self.current_workers = target
 
@@ -495,39 +514,99 @@ def process_posts_with_stats(
         return []
     downloader = controller or AdaptiveDownloadController()
     results: list[tuple[int, IngestRow | None, BuildRowStats]] = []
-    pending_embed: list[DownloadedPost] = []
-    first_pending_at: float | None = None
     embed_batch_size = max(1, int(getattr(settings, "ingest_embed_batch_size", 1)))
     embed_max_wait_sec = max(0.0, float(getattr(settings, "ingest_embed_max_wait_ms", 0.0))) / 1000.0
+    embed_queue_max = max(embed_batch_size * 4, 8)
+    embed_input: queue.Queue[DownloadedPost | None] = queue.Queue(maxsize=embed_queue_max)
+    embed_output: queue.SimpleQueue[tuple[int, IngestRow | None, BuildRowStats]] = queue.SimpleQueue()
+    embed_error: list[BaseException] = []
+    download_thread_state = threading.local()
+    media_clients: list[httpx.Client] = []
+    media_clients_lock = threading.Lock()
+
+    def flush_results() -> None:
+        while True:
+            try:
+                item = embed_output.get_nowait()
+            except queue.Empty:
+                break
+            downloader.observe(item[2])
+            results.append(item)
+
+    def embed_worker() -> None:
+        pending: list[DownloadedPost] = []
+        first_pending_at: float | None = None
+
+        def flush_pending() -> None:
+            nonlocal first_pending_at
+            if not pending:
+                first_pending_at = None
+                return
+            for item in build_rows_from_downloaded_batch(list(pending)):
+                embed_output.put(item)
+            pending.clear()
+            first_pending_at = None
+
+        try:
+            while True:
+                timeout: float | None = None
+                if pending and embed_max_wait_sec > 0 and first_pending_at is not None:
+                    timeout = max(0.0, embed_max_wait_sec - (perf_counter() - first_pending_at))
+                try:
+                    item = embed_input.get(timeout=timeout)
+                except queue.Empty:
+                    flush_pending()
+                    continue
+                if item is None:
+                    flush_pending()
+                    return
+                if not pending:
+                    first_pending_at = perf_counter()
+                pending.append(item)
+                if len(pending) >= embed_batch_size:
+                    flush_pending()
+        except BaseException as exc:
+            embed_error.append(exc)
+
+    worker = threading.Thread(target=embed_worker, name="ingest-embed", daemon=True)
+    worker.start()
+
+    def init_download_worker() -> None:
+        media_client = make_media_client()
+        download_thread_state.media_client = media_client
+        with media_clients_lock:
+            media_clients.append(media_client)
+
+    def download_with_thread_client(post: dict[str, Any]) -> DownloadedPost:
+        media_client = getattr(download_thread_state, "media_client", None)
+        if media_client is None:
+            media_client = make_media_client()
+            download_thread_state.media_client = media_client
+            with media_clients_lock:
+                media_clients.append(media_client)
+        return download_post_with_stats(media_client, post)
 
     workers = min(downloader.current_workers, max(1, len(posts)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        future_map = {pool.submit(download_post_with_stats, client, post): post for post in posts}
+    with ThreadPoolExecutor(max_workers=workers, initializer=init_download_worker) as pool:
+        future_map = {pool.submit(download_with_thread_client, post): post for post in posts}
         for future in as_completed(future_map):
             downloaded = future.result()
             if downloaded.image is None or downloaded.comp is None:
                 downloader.observe(downloaded.stats)
                 results.append((downloaded.post_id, None, downloaded.stats))
+                flush_results()
                 continue
 
-            if not pending_embed:
-                first_pending_at = perf_counter()
-            pending_embed.append(downloaded)
-            should_flush = len(pending_embed) >= embed_batch_size
-            if not should_flush and first_pending_at is not None and embed_max_wait_sec > 0:
-                should_flush = (perf_counter() - first_pending_at) >= embed_max_wait_sec
-            if should_flush:
-                flushed = build_rows_from_downloaded_batch(list(pending_embed))
-                pending_embed.clear()
-                first_pending_at = None
-                for item in flushed:
-                    downloader.observe(item[2])
-                results.extend(flushed)
-    if pending_embed:
-        flushed = build_rows_from_downloaded_batch(list(pending_embed))
-        for item in flushed:
-            downloader.observe(item[2])
-        results.extend(flushed)
+            embed_input.put(downloaded)
+            flush_results()
+
+    embed_input.put(None)
+    worker.join()
+    flush_results()
+    for media_client in media_clients:
+        media_client.close()
+    if embed_error:
+        raise RuntimeError("embed worker failed") from embed_error[0]
     return results
 
 
@@ -576,6 +655,16 @@ def make_client() -> httpx.Client:
         follow_redirects=True,
         http2=True,
         limits=httpx.Limits(max_connections=64, max_keepalive_connections=32, keepalive_expiry=20.0),
+        headers={"User-Agent": "booruViewer/0.1 (+https://danbooru.donmai.us/)"},
+    )
+
+
+def make_media_client() -> httpx.Client:
+    return httpx.Client(
+        timeout=30.0,
+        follow_redirects=True,
+        http2=bool(getattr(settings, "ingest_media_http2", False)),
+        limits=httpx.Limits(max_connections=8, max_keepalive_connections=4, keepalive_expiry=20.0),
         headers={"User-Agent": "booruViewer/0.1 (+https://danbooru.donmai.us/)"},
     )
 

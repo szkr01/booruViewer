@@ -23,6 +23,62 @@
   - 実 GPU 環境での `sync_posts` ベンチ確認
   - WSL 側 `python3` では `httpx` が未導入のため import 実行確認は未完了
 
+## Replan (2026-03-08, Ingest GPU Feed Smoothing)
+
+- [x] ダウンロード完了回収と GPU バッチ推論を分離し、GPU 供給の間欠化を減らす
+- [x] 推論ワーカで size/time ベース flush を維持しつつ、結果回収を並行化する
+- [x] 静的検証を再実施し、レビュー欄に結果を記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `app/ingest_posts.py` の `process_posts_with_stats()` を producer/consumer 形へ変更
+  - メインスレッドは `as_completed()` でダウンロード完了を回収し続け、成功した `DownloadedPost` を推論キューへ投入
+  - 背景 `embed_worker` が `ingest_embed_batch_size` / `ingest_embed_max_wait_ms` に従ってバッチ flush し、結果を別キュー経由で返す形にした
+  - これにより GPU バッチ実行中も次のダウンロード完了回収を止めず、供給の谷を減らす構造へ変更
+- 検証:
+  - `python3 -m compileall app` 成功
+- 未実施:
+  - 実 GPU 使用率波形の再確認
+
+## Replan (2026-03-08, Download Autotune Stabilization)
+
+- [x] download worker 自動調整を throughput ベースへ変更し、悪化時の増加を止める
+- [x] ダウンロード遅化が続く場合は worker を戻すロジックを追加する
+- [x] 静的検証を再実施し、レビュー欄に結果を記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `AdaptiveDownloadController` に前回ウィンドウの `download_avg` と `dl_img_s` を保持する状態を追加
+  - block / 高失敗率で下げる既存制御は維持しつつ、通常時は「download_avg 悪化かつ dl_img_s 悪化なら worker 減」「両方改善した時だけ worker 増」に変更
+  - autotune ログへ `dl_img_s` を追加し、増減判断の根拠を見えるようにした
+- 検証:
+  - `python3 -m compileall app` 成功
+- 未実施:
+  - 実運用ログでの worker 揺れ幅の再確認
+
+## Replan (2026-03-08, Media Client Parallelism)
+
+- [x] media download を共有 client から worker thread ごとの client へ分離する
+- [x] page API と media download の HTTP 振る舞いを分け、media 側の並列性を上げる
+- [x] 静的検証を再実施し、レビュー欄に結果を記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `process_posts_with_stats()` の download worker ごとに `make_media_client()` で専用 `httpx.Client` を作るよう変更
+  - page API 取得は既存の `make_client()` を維持し、media download だけ `ingest_media_http2` 設定で HTTP/1.1 優先に切り替えられるよう分離
+  - per-thread client は `ThreadPoolExecutor` の `initializer` で初期化し、ページ処理終了時に close するよう整理
+  - `README.md` と `config.json` / `app/config.py` に `ingest_media_http2` を追加
+- 検証:
+  - `python3 -m compileall app` 成功
+- 未実施:
+  - 実 CDN スループット改善の確認
+
 ## Replan (2026-03-08, DB URL Recording Fix)
 
 - [x] 現行 ingestion の URL 選定と DB 記録を分離し、記録側を `720x720` 実 URL 基準へ戻す

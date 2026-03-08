@@ -27,6 +27,7 @@
   "ingest_embed_batch_size": 32,
   "ingest_embed_max_wait_ms": 15.0,
   "ingest_embed_autocast": true,
+  "ingest_media_http2": false,
   "ingest_http_max_retries": 4,
   "ingest_http_retry_base_sec": 0.6,
   "ingest_http_retry_backoff": 1.8,

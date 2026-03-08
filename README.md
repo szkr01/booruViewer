@@ -36,6 +36,7 @@ setup.bat
 - `ingest_embed_batch_size`: 画像特徴抽出を GPU へまとめて投げる推論バッチサイズ
 - `ingest_embed_max_wait_ms`: 推論キューを時間で flush する上限待ち時間
 - `ingest_embed_autocast`: CUDA 推論時に autocast(fp16) を使うか
+- `ingest_media_http2`: 画像ダウンロードで HTTP/2 を使うか。既定は `false` で、worker ごとの複数接続を優先します
 - `collector_phase_budget_sec`: 単一 collector が1サイクルで使う時間予算。未完了分は次サイクルで再開
 - `docs/` 配下は参照しません。実データのパスを明示指定してください。
 

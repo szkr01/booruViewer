@@ -39,6 +39,7 @@ class Settings:
     ingest_embed_batch_size: int
     ingest_embed_max_wait_ms: float
     ingest_embed_autocast: bool
+    ingest_media_http2: bool
     ingest_http_max_retries: int
     ingest_http_retry_base_sec: float
     ingest_http_retry_backoff: float
@@ -97,6 +98,7 @@ class SettingsLoader:
         ingest_embed_batch_size = int(config.get("ingest_embed_batch_size", 16))
         ingest_embed_max_wait_ms = float(config.get("ingest_embed_max_wait_ms", 15.0))
         ingest_embed_autocast = bool(config.get("ingest_embed_autocast", True))
+        ingest_media_http2 = bool(config.get("ingest_media_http2", False))
         ingest_http_max_retries = int(config.get("ingest_http_max_retries", 4))
         ingest_http_retry_base_sec = float(config.get("ingest_http_retry_base_sec", 0.6))
         ingest_http_retry_backoff = float(config.get("ingest_http_retry_backoff", 1.8))
@@ -139,6 +141,7 @@ class SettingsLoader:
             ingest_embed_batch_size=ingest_embed_batch_size,
             ingest_embed_max_wait_ms=ingest_embed_max_wait_ms,
             ingest_embed_autocast=ingest_embed_autocast,
+            ingest_media_http2=ingest_media_http2,
             ingest_http_max_retries=ingest_http_max_retries,
             ingest_http_retry_base_sec=ingest_http_retry_base_sec,
             ingest_http_retry_backoff=ingest_http_retry_backoff,
