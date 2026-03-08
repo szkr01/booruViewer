@@ -1,0 +1,16 @@
+/.venv/
+/.uv-cache/
+/app/__pycache__/
+/app/services/__pycache__/
+/app/*.pyc
+/app/services/*.pyc
+/.pytest_cache/
+/data/*.db
+/data/*.db-shm
+/data/*.db-wal
+/data/*.index
+/data/*.f16
+/data/build_state.json
+/data/incoming/
+
+/docs/*

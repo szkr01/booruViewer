@@ -1,0 +1,1485 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+	<!-- REQUIRED META DATA -->
+	<title>Helix Gallery V4 - Inertia & Swipe</title>
+	<meta name="description" content="Infinite spiral gallery with server-side thumbnail optimization">
+	<meta name="page:icon" content="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/svgs/solid/infinity.svg">
+	<meta name="page:color" content="#4f46e5">
+
+	<!-- Tailwind CSS -->
+	<script src="https://cdn.tailwindcss.com"></script>
+	<script>
+		tailwind.config = {
+			theme: {
+				extend: {
+					colors: {
+						brand: {
+							DEFAULT: '#4f46e5',
+							dark: '#312e81',
+							accent: '#818cf8',
+						},
+						ui: {
+							bg: '#050505',
+							panel: '#0f0f12',
+							border: '#1f1f26'
+						}
+					},
+					animation: {
+						'fade-in': 'fadeIn 0.2s ease-out',
+						'slide-up': 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+						'slide-in-bottom': 'slideInBottom 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+					},
+					keyframes: {
+						fadeIn: {
+							'0%': { opacity: '0' },
+							'100%': { opacity: '1' },
+						},
+						slideUp: {
+							'0%': { transform: 'translateY(20px)', opacity: '0' },
+							'100%': { transform: 'translateY(0)', opacity: '1' },
+						},
+						slideInBottom: {
+							'0%': { transform: 'translateY(100%)' },
+							'100%': { transform: 'translateY(0)' },
+						}
+					}
+				}
+			}
+		}
+	</script>
+
+	<!-- Icons -->
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+	<style>
+		body,
+		html {
+			margin: 0;
+			padding: 0;
+			width: 100%;
+			height: 100%;
+			overflow: hidden;
+			background-color: #050505;
+			touch-action: none;
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+			color: #e0e7ff;
+			-webkit-font-smoothing: antialiased;
+			overscroll-behavior: none;
+		}
+
+		#canvas-container {
+			position: absolute;
+			top: 0;
+			left: 0;
+			width: 100%;
+			height: 100%;
+			z-index: 1;
+		}
+
+		.ui-layer {
+			position: absolute;
+			z-index: 10;
+			pointer-events: none;
+			width: 100%;
+			height: 100%;
+			top: 0;
+			left: 0;
+		}
+
+		.pointer-events-auto {
+			pointer-events: auto;
+		}
+
+		/* Custom Scrollbar */
+		.custom-scroll::-webkit-scrollbar {
+			width: 4px;
+		}
+
+		.custom-scroll::-webkit-scrollbar-track {
+			background: transparent;
+		}
+
+		.custom-scroll::-webkit-scrollbar-thumb {
+			background: #333;
+			border-radius: 2px;
+		}
+
+		.custom-scroll::-webkit-scrollbar-thumb:hover {
+			background: #4f46e5;
+		}
+
+		.glass-panel {
+			background: rgba(15, 15, 18, 0.96);
+			backdrop-filter: blur(16px);
+			border: 1px solid rgba(255, 255, 255, 0.08);
+			box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+		}
+
+		/* Common Glass Button Style */
+		.btn-glass {
+			background: rgba(0, 0, 0, 0.4);
+			backdrop-filter: blur(8px);
+			border: 1px solid rgba(255, 255, 255, 0.1);
+			color: rgba(255, 255, 255, 0.9);
+			transition: all 0.2s ease;
+		}
+
+		.btn-glass:hover {
+			background: rgba(255, 255, 255, 0.1);
+			color: #fff;
+		}
+
+		.btn-glass:active {
+			transform: scale(0.95);
+		}
+
+		.loader {
+			border: 2px solid rgba(255, 255, 255, 0.1);
+			border-left-color: #4f46e5;
+			border-radius: 50%;
+			width: 24px;
+			height: 24px;
+			animation: spin 1s linear infinite;
+		}
+
+		@keyframes spin {
+			0% {
+				transform: rotate(0deg);
+			}
+
+			100% {
+				transform: rotate(360deg);
+			}
+		}
+
+		/* Detail Image Manipulation */
+		#detail-view-container {
+			touch-action: none;
+			overflow: hidden;
+			cursor: grab;
+		}
+
+		#detail-view-container:active {
+			cursor: grabbing;
+		}
+		
+		#detail-track {
+			will-change: transform;
+		}
+
+		#detail-image-wrapper {
+			will-change: transform;
+			transform-origin: center center;
+		}
+	</style>
+</head>
+
+<body>
+
+	<!-- Main Gallery Canvas -->
+	<div id="canvas-container">
+		<canvas id="galleryCanvas"></canvas>
+	</div>
+
+	<!-- Main UI Overlay -->
+	<div class="ui-layer flex flex-col justify-between p-4 safe-area-inset">
+		<!-- Header -->
+		<div class="flex justify-between items-start pointer-events-auto">
+			<!-- Header Background Added -->
+			<div class="btn-glass rounded-2xl p-3 px-4 flex flex-col justify-center shadow-lg select-none">
+				<h1 class="text-xl font-black tracking-tighter text-white drop-shadow-md leading-none">
+					HELIX
+				</h1>
+				<div id="status-indicator"
+					class="text-[9px] text-gray-400 font-mono font-bold tracking-widest mt-1 leading-none">
+					SYSTEM READY</div>
+			</div>
+
+			<button onclick="app.resetView()"
+				class="w-12 h-12 btn-glass rounded-full flex items-center justify-center shadow-lg">
+				<i class="fa-solid fa-compress text-sm"></i>
+			</button>
+		</div>
+
+		<!-- Search FAB (Modified to Glass) -->
+		<div class="absolute bottom-8 right-6 pointer-events-auto">
+			<button onclick="ui.openSearchModal()"
+				class="group w-16 h-16 btn-glass rounded-full shadow-[0_8px_30px_rgba(0,0,0,0.5)] flex items-center justify-center transition-all transform hover:scale-105 active:scale-90 border-brand/30">
+				<i
+					class="fa-solid fa-magnifying-glass text-xl text-brand-accent group-hover:text-white group-hover:rotate-90 transition-all duration-300"></i>
+			</button>
+		</div>
+	</div>
+
+	<!-- Search Modal -->
+	<div id="search-modal"
+		class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm animate-fade-in flex items-end sm:items-center justify-center pointer-events-auto">
+		<div
+			class="glass-panel w-full sm:w-[480px] h-[85vh] sm:h-auto sm:max-h-[80vh] rounded-t-3xl sm:rounded-3xl flex flex-col animate-slide-up overflow-hidden shadow-2xl">
+
+			<div class="p-5 border-b border-ui-border flex justify-between items-center shrink-0 bg-black/20">
+				<h2 class="text-lg font-bold text-white flex items-center gap-2">
+					<span class="w-1 h-5 bg-brand rounded-full"></span>
+					Search Filter
+				</h2>
+				<button onclick="ui.closeSearchModal()"
+					class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
+					<i class="fa-solid fa-xmark"></i>
+				</button>
+			</div>
+
+			<div class="flex-1 overflow-y-auto custom-scroll p-5 space-y-6">
+				<!-- Text Query with Autocomplete -->
+				<div class="space-y-2 relative">
+					<label class="text-xs font-bold text-gray-500 uppercase tracking-wider">Keywords</label>
+					<div class="relative group">
+						<input type="text" id="search-text" placeholder="Concept, tag, style..." autocomplete="off"
+							class="w-full bg-black/40 border border-ui-border rounded-xl py-3 pl-11 pr-4 text-white focus:outline-none focus:border-brand focus:ring-1 focus:ring-brand transition-all placeholder-gray-600">
+						<i
+							class="fa-solid fa-hashtag absolute left-4 top-3.5 text-gray-500 group-focus-within:text-brand transition-colors"></i>
+					</div>
+					<!-- Autocomplete Dropdown -->
+					<div id="search-suggestions"
+						class="hidden absolute top-full left-0 w-full mt-2 bg-ui-panel border border-ui-border rounded-xl shadow-2xl z-50 max-h-48 overflow-y-auto custom-scroll">
+						<!-- Suggestions injected via JS -->
+					</div>
+				</div>
+
+				<!-- Image Refs -->
+				<div class="space-y-2">
+					<div class="flex justify-between items-center">
+						<label class="text-xs font-bold text-gray-500 uppercase tracking-wider">Image Guidance</label>
+						<label
+							class="text-xs font-bold text-brand-accent cursor-pointer hover:text-white transition-colors py-1 px-2 rounded hover:bg-white/5">
+							<i class="fa-solid fa-plus mr-1"></i>UPLOAD
+							<input type="file" multiple accept="image/*" class="hidden"
+								onchange="searchManager.handleFileUpload(this)">
+						</label>
+					</div>
+
+					<div id="reference-list" class="space-y-3 min-h-[60px]">
+						<div id="empty-refs"
+							class="flex flex-col items-center justify-center py-8 border border-dashed border-ui-border rounded-xl text-gray-600 gap-2 bg-black/20">
+							<i class="fa-regular fa-image text-2xl opacity-50"></i>
+							<span class="text-sm">Drag images or upload</span>
+						</div>
+					</div>
+				</div>
+
+				<!-- Limit Slider -->
+				<div class="space-y-3 pt-2">
+					<div class="flex justify-between text-xs font-bold text-gray-500 uppercase">
+						<span>Result Count</span>
+						<span id="limit-val" class="text-brand-accent">60000</span>
+					</div>
+					<input type="range" id="search-limit" min="10000" max="100000" value="60000" step="10000"
+						oninput="document.getElementById('limit-val').textContent = this.value"
+						class="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-brand">
+				</div>
+			</div>
+
+			<div class="p-5 border-t border-ui-border bg-black/40 shrink-0">
+				<button onclick="searchManager.executeSearch()"
+					class="w-full bg-brand hover:bg-brand-dark text-white font-bold py-3.5 rounded-xl transition-all shadow-lg active:scale-[0.98] flex items-center justify-center gap-2">
+					<span>EXPLORE</span>
+					<i class="fa-solid fa-arrow-right-long"></i>
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- Detail View Modal -->
+	<div id="detail-modal"
+		class="hidden fixed inset-0 z-[60] bg-black flex flex-col animate-fade-in pointer-events-auto touch-none">
+
+		<!-- Top Controls (Overlay) -->
+		<div class="absolute top-0 left-0 w-full p-4 flex justify-between items-start z-30 pointer-events-none">
+			<div
+				class="pointer-events-auto btn-glass px-4 py-3 rounded-full text-xs font-mono text-gray-300 flex items-center shadow-lg h-12">
+				ID: <span id="detail-id" class="text-brand-accent font-bold ml-2"></span>
+			</div>
+			<button onclick="ui.closeDetailModal()"
+				class="pointer-events-auto w-12 h-12 btn-glass rounded-full text-white flex items-center justify-center shadow-lg">
+				<i class="fa-solid fa-xmark text-lg"></i>
+			</button>
+		</div>
+
+		<!-- Interactive Image Area -->
+		<div id="detail-view-container"
+			class="w-full h-full relative overflow-hidden bg-black touch-none flex items-center justify-center">
+
+			<!-- Slider Track -->
+			<div id="detail-track" class="relative w-full h-full flex items-center justify-center pointer-events-none">
+				
+				<!-- Previous Image (Ghost) -->
+				<div class="absolute left-0 top-0 w-full h-full -translate-x-full flex items-center justify-center pointer-events-none">
+					<img id="detail-prev-image" draggable="false" class="max-w-full max-h-full object-contain pointer-events-none select-none">
+				</div>
+
+				<!-- Current Image Wrapper (Zoomable) -->
+				<div id="detail-image-wrapper"
+					class="relative w-full h-full flex items-center justify-center will-change-transform origin-center pointer-events-none">
+					<img id="detail-image-thumb" src="" draggable="false"
+						class="absolute max-w-full max-h-full object-contain pointer-events-none select-none transition-opacity duration-300 opacity-0 filter blur-sm">
+					<img id="detail-image" src="" draggable="false"
+						class="relative max-w-full max-h-full object-contain pointer-events-none select-none shadow-2xl transition-opacity duration-300 opacity-0">
+				</div>
+
+				<!-- Next Image (Ghost) -->
+				<div class="absolute left-0 top-0 w-full h-full translate-x-full flex items-center justify-center pointer-events-none">
+					<img id="detail-next-image" draggable="false" class="max-w-full max-h-full object-contain pointer-events-none select-none">
+				</div>
+			</div>
+
+			<!-- Loader -->
+			<div id="detail-loading" class="absolute inset-0 flex items-center justify-center pointer-events-none">
+				<div class="loader"></div>
+			</div>
+		</div>
+
+		<!-- Floating Action Menu (Press & Slide) -->
+		<div id="fab-container"
+			class="absolute bottom-8 right-6 z-40 pointer-events-none flex flex-col items-end gap-3 select-none touch-none"
+			oncontextmenu="return false;">
+
+			<!-- Menu Items (Hidden by default) -->
+			<div id="fab-menu"
+				class="flex flex-col gap-3 items-end transition-all duration-200 opacity-0 translate-y-4 pointer-events-none scale-90 origin-bottom pb-4">
+
+				<!-- Item 1: Use as Ref -->
+				<div id="fab-opt-ref"
+					class="group flex items-center gap-3 transition-transform duration-150 origin-right">
+					<span
+						class="bg-black/60 backdrop-blur text-white text-xs font-bold px-2 py-1 rounded opacity-0 group-[.active]:opacity-100 transition-opacity">Use
+						as Ref</span>
+					<div
+						class="fab-btn w-14 h-14 rounded-full btn-glass text-white flex items-center justify-center shadow-lg text-xl group-[.active]:bg-brand group-[.active]:border-brand group-[.active]:scale-110 transition-all">
+						<i class="fa-solid fa-layer-group"></i>
+					</div>
+				</div>
+
+				<!-- Item 2: Tags -->
+				<div id="fab-opt-tags"
+					class="group flex items-center gap-3 transition-transform duration-150 origin-right">
+					<span
+						class="bg-black/60 backdrop-blur text-white text-xs font-bold px-2 py-1 rounded opacity-0 group-[.active]:opacity-100 transition-opacity">Tags</span>
+					<div
+						class="fab-btn w-14 h-14 rounded-full btn-glass text-white flex items-center justify-center shadow-lg text-xl group-[.active]:bg-brand group-[.active]:border-brand group-[.active]:scale-110 transition-all">
+						<i class="fa-solid fa-tags"></i>
+					</div>
+				</div>
+
+				<!-- Item 3: Close -->
+				<div id="fab-opt-close"
+					class="group flex items-center gap-3 transition-transform duration-150 origin-right">
+					<span
+						class="bg-black/60 backdrop-blur text-white text-xs font-bold px-2 py-1 rounded opacity-0 group-[.active]:opacity-100 transition-opacity">Close</span>
+					<div
+						class="fab-btn w-14 h-14 rounded-full btn-glass text-red-400 flex items-center justify-center shadow-lg text-xl group-[.active]:bg-red-500/80 group-[.active]:text-white group-[.active]:border-red-500 group-[.active]:scale-110 transition-all">
+						<i class="fa-solid fa-xmark"></i>
+					</div>
+				</div>
+
+			</div>
+
+			<!-- Main Trigger Button -->
+			<button id="fab-trigger"
+				class="w-14 h-14 btn-glass rounded-full shadow-[0_0_20px_rgba(0,0,0,0.5)] flex items-center justify-center text-xl transition-transform active:scale-90 z-50 pointer-events-auto">
+				<i class="fa-solid fa-bars"></i>
+			</button>
+		</div>
+	</div>
+
+	<!-- Tags Bottom Sheet Modal -->
+	<div id="tags-modal" class="hidden fixed inset-0 z-[70] pointer-events-auto">
+		<!-- Backdrop -->
+		<div class="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in" onclick="ui.closeTagsModal()"></div>
+
+		<!-- Sheet -->
+		<div
+			class="absolute bottom-0 left-0 w-full max-h-[60vh] bg-ui-panel border-t border-ui-border rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.8)] flex flex-col animate-slide-in-bottom">
+			<!-- Handle -->
+			<div class="w-full flex justify-center pt-3 pb-1" onclick="ui.closeTagsModal()">
+				<div class="w-12 h-1.5 bg-gray-700 rounded-full opacity-50"></div>
+			</div>
+
+			<div class="p-5 border-b border-ui-border flex justify-between items-center">
+				<h3 class="text-sm font-bold text-gray-300 uppercase tracking-wider">
+					<i class="fa-solid fa-tags mr-2 text-brand"></i>Detected Tags
+				</h3>
+				<button onclick="ui.closeTagsModal()" class="text-gray-500 hover:text-white p-2">
+					<i class="fa-solid fa-chevron-down"></i>
+				</button>
+			</div>
+
+			<div id="tags-list"
+				class="flex-1 overflow-y-auto custom-scroll p-5 pb-10 flex flex-wrap content-start gap-2">
+				<!-- Tags injected here -->
+			</div>
+		</div>
+	</div>
+
+	<!-- Notification Toast -->
+	<div id="toast"
+		class="fixed top-6 left-1/2 transform -translate-x-1/2 bg-ui-panel border border-ui-border text-white px-5 py-3 rounded-full shadow-2xl flex items-center gap-3 z-[100] transition-all duration-300 opacity-0 translate-y-[-20px] pointer-events-none scale-90">
+		<i class="fa-solid fa-info-circle text-brand-accent"></i>
+		<span id="toast-msg" class="text-sm font-medium">Notification</span>
+	</div>
+
+	<script>
+		// --- Configuration ---
+		const API_BASE = window.location.origin;
+		// const API_BASE = "http://localhost:8002"; // Development override
+
+		const CONFIG = {
+			baseCellSize: 180,
+			gap: 2,
+			zoomMin: 0.3,
+			zoomMax: 1.0,
+			initialZoom: 0.6,
+			renderBuffer: 1.5,
+			thumbSize: '256x256' // Matches server-side optimization
+		};
+
+		// --- Core State ---
+		const state = {
+			images: [],
+			// Camera now includes velocity (vx, vy) for inertia
+			camera: { x: 0, y: 0, z: CONFIG.initialZoom, vx: 0, vy: 0 },
+			drag: { active: false, lastX: 0, lastY: 0, startX: 0, startY: 0, startTime: 0 },
+			// Physics config for inertia
+			inertia: { active: false, friction: 0.97, stopThreshold: 0.05 },
+			searchRefs: [],
+			currentId: null,
+			canvasSize: { w: 0, h: 0 },
+
+			// Detail View State
+			detail: {
+				index: 0, // Current index in state.images
+				reset: null // Callback to reset view
+			}
+		};
+
+		// --- Math & Spiral ---
+		function getSpiralCoord(n) {
+			if (n === 0) return { x: 0, y: 0 };
+			const k = Math.ceil((Math.sqrt(n + 1) - 1) / 2);
+			let t = 2 * k;
+			let m = (t + 1) * (t + 1);
+			if (n >= m - t) return { x: k - (m - n), y: -k };
+			m -= t;
+			if (n >= m - t) return { x: -k, y: -k + (m - n) };
+			m -= t;
+			if (n >= m - t) return { x: -k + (m - n), y: k };
+			return { x: k, y: k - (m - n - t) };
+		}
+
+		// --- Gallery Canvas Engine ---
+		const canvas = document.getElementById('galleryCanvas');
+		const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+
+		function initCanvas() {
+			const dpr = window.devicePixelRatio || 1;
+			const rect = canvas.parentElement.getBoundingClientRect();
+			canvas.width = rect.width * dpr;
+			canvas.height = rect.height * dpr;
+			canvas.style.width = `${rect.width}px`;
+			canvas.style.height = `${rect.height}px`;
+			ctx.scale(dpr, dpr);
+			state.canvasSize.w = rect.width;
+			state.canvasSize.h = rect.height;
+			ctx.imageSmoothingEnabled = true;
+			ctx.imageSmoothingQuality = 'medium';
+			render();
+		}
+
+		function render() {
+			ctx.fillStyle = '#050505';
+			ctx.fillRect(0, 0, state.canvasSize.w, state.canvasSize.h);
+
+			const cellSize = CONFIG.baseCellSize;
+			const fullSize = cellSize + CONFIG.gap;
+			const zoom = state.camera.z;
+			const hw = state.canvasSize.w / 2;
+			const hh = state.canvasSize.h / 2;
+
+			// Viewport bounds
+			const visibleW = state.canvasSize.w / zoom;
+			const visibleH = state.canvasSize.h / zoom;
+			const margin = cellSize * CONFIG.renderBuffer;
+			const left = state.camera.x - visibleW / 2 - margin;
+			const right = state.camera.x + visibleW / 2 + margin;
+			const top = state.camera.y - visibleH / 2 - margin;
+			const bottom = state.camera.y + visibleH / 2 + margin;
+
+			for (let i = 0; i < state.images.length; i++) {
+				const imgData = state.images[i];
+				const wx = imgData.gx * fullSize;
+				const wy = imgData.gy * fullSize;
+
+				// Culling
+				if (wx + cellSize / 2 < left || wx - cellSize / 2 > right ||
+					wy + cellSize / 2 < top || wy - cellSize / 2 > bottom) continue;
+
+				const sx = (wx - state.camera.x) * zoom + hw;
+				const sy = (wy - state.camera.y) * zoom + hh;
+				const sSize = cellSize * zoom;
+
+				// Draw Logic
+				if (!imgData.loaded) {
+					ctx.fillStyle = '#0f0f12';
+					ctx.fillRect(sx - sSize / 2, sy - sSize / 2, sSize, sSize);
+
+					if (!imgData.loading) {
+						imgData.loading = true;
+						const img = new Image();
+						// Request optimized thumbnail
+						img.src = `${API_BASE}/API/media/${imgData.id}?size=${CONFIG.thumbSize}`;
+						img.onload = () => {
+							imgData.imgObj = img;
+							imgData.loaded = true;
+							imgData.loading = false;
+							requestAnimationFrame(render);
+						};
+						img.onerror = () => { imgData.loading = false; };
+					}
+					if (sSize > 40) {
+						ctx.fillStyle = '#333';
+						ctx.font = `bold ${10 * zoom}px monospace`;
+						ctx.textAlign = 'center';
+						ctx.textBaseline = 'middle';
+						ctx.fillText(imgData.id, sx, sy);
+					}
+				} else {
+					const dx = sx - sSize / 2;
+					const dy = sy - sSize / 2;
+					const dSize = sSize;
+
+					// No need for complex aspect ratio calc here
+					// Draw entire source image into destination rect
+					ctx.drawImage(imgData.imgObj, 0, 0, 256, 256, dx, dy, dSize, dSize);
+				}
+			}
+		}
+
+		// --- Inertia Animation Loop ---
+		function updateInertia() {
+			if (!state.inertia.active) return;
+
+			// Apply velocity to camera position
+			state.camera.x += state.camera.vx;
+			state.camera.y += state.camera.vy;
+
+			// Apply friction
+			state.camera.vx *= state.inertia.friction;
+			state.camera.vy *= state.inertia.friction;
+
+			render();
+
+			// Stop if velocity is low
+			if (Math.abs(state.camera.vx) < state.inertia.stopThreshold && Math.abs(state.camera.vy) < state.inertia.stopThreshold) {
+				state.inertia.active = false;
+				state.camera.vx = 0;
+				state.camera.vy = 0;
+			} else {
+				requestAnimationFrame(updateInertia);
+			}
+		}
+
+		// --- Interaction: Gallery (Fixed for Mouse & Touch & Inertia) ---
+		function setupGalleryInteractions() {
+			// アクティブなポインター（押されている指/マウス）のみを保持する
+			const pointers = new Map();
+
+			// ジェスチャー計算用
+			let prevDist = -1;
+			let prevCenter = null;
+			let lastMoveTime = 0;
+
+			// クリック判定用
+			let startPos = { x: 0, y: 0 };
+			let totalMoveDistance = 0;
+			let startTime = 0;
+
+			// --- ヘルパー関数 ---
+			function getDistance(p1, p2) {
+				return Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
+			}
+
+			function getCenter(p1, p2) {
+				return {
+					x: (p1.clientX + p2.clientX) / 2,
+					y: (p1.clientY + p2.clientY) / 2
+				};
+			}
+
+			// --- イベントハンドラー ---
+
+			canvas.addEventListener('pointerdown', e => {
+				// マウスの場合、左クリック(0)以外は無視（右クリメニューなどを妨害しない）
+				if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+				// Stop inertia on touch/click
+				state.inertia.active = false;
+				state.camera.vx = 0;
+				state.camera.vy = 0;
+
+				pointers.set(e.pointerId, e);
+				canvas.setPointerCapture(e.pointerId);
+
+				// 最初の1本目の指/クリックの時だけ初期化
+				if (pointers.size === 1) {
+					startPos = { x: e.clientX, y: e.clientY };
+					totalMoveDistance = 0;
+					startTime = Date.now();
+
+					// ジェスチャー開始位置として記録（パン操作の始点）
+					prevCenter = { x: e.clientX, y: e.clientY };
+				}
+
+				// 2本目以降が追加されたら、距離計算などをリセットしてピンチに備える
+				if (pointers.size === 2) {
+					prevDist = -1;
+					prevCenter = null;
+				}
+			});
+
+			canvas.addEventListener('pointermove', e => {
+				// 【重要】Mapに登録されていないポインター（ホバー中のマウスなど）は無視する
+				if (!pointers.has(e.pointerId)) return;
+
+				// イベント情報を最新に更新
+				pointers.set(e.pointerId, e);
+				lastMoveTime = Date.now();
+
+				// --- ケース1: ピンチズーム (2本指) ---
+				if (pointers.size === 2) {
+					const [p1, p2] = [...pointers.values()];
+					const curDist = getDistance(p1, p2);
+					const curCenter = getCenter(p1, p2);
+
+					// 前回のフレーム情報がある場合のみ計算
+					if (prevDist > 0 && prevCenter) {
+						// ズーム率
+						const scaleDiff = curDist / prevDist;
+						let newZoom = state.camera.z * scaleDiff;
+						newZoom = Math.max(CONFIG.zoomMin, Math.min(newZoom, CONFIG.zoomMax));
+
+						// ピンチ中心を基準にズーム＆パン
+						const hw = state.canvasSize.w / 2;
+						const hh = state.canvasSize.h / 2;
+
+						// 1. 前回の中心点に対応するワールド座標を計算
+						const prevWx = (prevCenter.x - hw) / state.camera.z + state.camera.x;
+						const prevWy = (prevCenter.y - hh) / state.camera.z + state.camera.y;
+
+						// 2. カメラ更新
+						state.camera.z = newZoom;
+						state.camera.x = prevWx - (curCenter.x - hw) / newZoom;
+						state.camera.y = prevWy - (curCenter.y - hh) / newZoom;
+
+						requestAnimationFrame(render);
+					}
+
+					prevDist = curDist;
+					prevCenter = curCenter;
+					totalMoveDistance += 10; // ピンチ中はクリック判定を無効化
+				}
+				// --- ケース2: パン移動 (1本指 / マウスドラッグ) ---
+				else if (pointers.size === 1) {
+					// 指が1本だけ、かつ前回位置が記録されている場合
+					if (prevCenter) {
+						const dx = e.clientX - prevCenter.x;
+						const dy = e.clientY - prevCenter.y;
+
+						// Update camera position
+						state.camera.x -= dx / state.camera.z;
+						state.camera.y -= dy / state.camera.z;
+
+						// Update Velocity for Inertia (Movement opposite to drag)
+						state.camera.vx = -dx / state.camera.z;
+						state.camera.vy = -dy / state.camera.z;
+
+						totalMoveDistance += Math.hypot(dx, dy);
+						requestAnimationFrame(render);
+					}
+
+					// 現在位置を次回の「前回位置」として保存
+					prevCenter = { x: e.clientX, y: e.clientY };
+				}
+			});
+
+			// ポインター終了処理
+			const pointerUpHandler = e => {
+				if (!pointers.has(e.pointerId)) return;
+
+				pointers.delete(e.pointerId);
+				canvas.releasePointerCapture(e.pointerId);
+
+				// 指が減ったのでジェスチャー状態をリセット
+				prevDist = -1;
+				prevCenter = null;
+
+				// もし指がまだ残っているなら（例: 2本→1本）、残った指の位置を次回の始点にする
+				if (pointers.size === 1) {
+					const remaining = [...pointers.values()][0];
+					prevCenter = { x: remaining.clientX, y: remaining.clientY };
+					// 慣性は起こさない
+					state.camera.vx = 0;
+					state.camera.vy = 0;
+				}
+
+				// 全ての指が離れた時、クリック判定と慣性処理を行う
+				if (pointers.size === 0) {
+					const timeDiff = Date.now() - startTime;
+
+					// Click Detection
+					if (totalMoveDistance < 10 && timeDiff < 300) {
+						handleClick(e.clientX, e.clientY);
+					}
+					// Inertia Trigger
+					else {
+						const sinceLastMove = Date.now() - lastMoveTime;
+						// Only trigger inertia if release was recent (flinging motion)
+						if (sinceLastMove < 100 && (Math.abs(state.camera.vx) > 0.1 || Math.abs(state.camera.vy) > 0.1)) {
+							state.inertia.active = true;
+							requestAnimationFrame(updateInertia);
+						}
+					}
+				}
+			};
+
+			canvas.addEventListener('pointerup', pointerUpHandler);
+			canvas.addEventListener('pointercancel', pointerUpHandler);
+			canvas.addEventListener('pointerout', pointerUpHandler);
+			canvas.addEventListener('pointerleave', pointerUpHandler);
+
+			// --- マウスホイール (PC用ズーム) ---
+			canvas.addEventListener('wheel', e => {
+				e.preventDefault();
+				
+				// Stop inertia on wheel
+				state.inertia.active = false;
+				state.camera.vx = 0;
+				state.camera.vy = 0;
+
+				const delta = -e.deltaY * 0.001;
+				const factor = Math.pow(10, delta);
+				let newZoom = Math.max(CONFIG.zoomMin, Math.min(state.camera.z * factor, CONFIG.zoomMax));
+
+				const hw = state.canvasSize.w / 2;
+				const hh = state.canvasSize.h / 2;
+
+				const wx = (e.clientX - hw) / state.camera.z + state.camera.x;
+				const wy = (e.clientY - hh) / state.camera.z + state.camera.y;
+
+				state.camera.z = newZoom;
+				state.camera.x = wx - (e.clientX - hw) / newZoom;
+				state.camera.y = wy - (e.clientY - hh) / newZoom;
+
+				requestAnimationFrame(render);
+			}, { passive: false });
+		}
+		function handleClick(sx, sy) {
+			const hw = state.canvasSize.w / 2;
+			const hh = state.canvasSize.h / 2;
+			const wx = (sx - hw) / state.camera.z + state.camera.x;
+			const wy = (sy - hh) / state.camera.z + state.camera.y;
+			const half = CONFIG.baseCellSize / 2;
+			const full = CONFIG.baseCellSize + CONFIG.gap;
+
+			// Find index
+			for (let i = 0; i < state.images.length; i++) {
+				const img = state.images[i];
+				const ix = img.gx * full;
+				const iy = img.gy * full;
+				if (wx >= ix - half && wx <= ix + half && wy >= iy - half && wy <= iy + half) {
+					ui.openDetailModal(img.id);
+					break;
+				}
+			}
+		}
+
+		// --- Interaction: Detail View (Slide & Pinch-Zoom) ---
+		function setupDetailInteractions() {
+			const container = document.getElementById('detail-view-container');
+			const wrapper = document.getElementById('detail-image-wrapper');
+			const track = document.getElementById('detail-track'); // Slider Track
+
+			// 2 Transform Layers
+			let imgTransform = { x: 0, y: 0, scale: 1 }; // Zoom/Pan inside image
+			let trackTransform = { x: 0 }; // Slide left/right
+
+			// Gesture State
+			let evCache = [];
+			let startState = {
+				scale: 1, imgX: 0, imgY: 0, trackX: 0,
+				midX: 0, midY: 0, dist: 0
+			};
+			let mode = 'NONE'; // 'SWIPE' or 'ZOOM_PAN'
+
+			// Update Helpers
+			function updateImgElement(duration = 0) {
+				wrapper.style.transition = duration > 0 ? `transform ${duration}ms cubic-bezier(0.1, 0.9, 0.2, 1)` : '';
+				wrapper.style.transform = `translate(${imgTransform.x}px, ${imgTransform.y}px) scale(${imgTransform.scale})`;
+			}
+			function updateTrackElement(duration = 0) {
+				track.style.transition = duration > 0 ? `transform ${duration}ms cubic-bezier(0.1, 0.9, 0.2, 1)` : '';
+				track.style.transform = `translate(${trackTransform.x}px, 0)`;
+			}
+
+			// --- Pointer Events ---
+
+			container.addEventListener('pointerdown', e => {
+				if (e.pointerType === 'mouse' && e.button !== 0) return;
+				container.setPointerCapture(e.pointerId);
+				evCache.push(e);
+
+				if (evCache.length === 1) {
+					// Decide mode based on current zoom
+					mode = imgTransform.scale > 1.05 ? 'ZOOM_PAN' : 'SWIPE';
+					
+					// Record Start
+					startState.trackX = trackTransform.x;
+					startState.imgX = imgTransform.x;
+					startState.imgY = imgTransform.y;
+					startState.midX = e.clientX;
+					startState.midY = e.clientY;
+					
+					// Clear transitions
+					wrapper.style.transition = '';
+					track.style.transition = '';
+
+				} else if (evCache.length === 2) {
+					// Switch to Pinch
+					mode = 'PINCH';
+					startState.scale = imgTransform.scale;
+					startState.imgX = imgTransform.x;
+					startState.imgY = imgTransform.y;
+					
+					const dx = evCache[1].clientX - evCache[0].clientX;
+					const dy = evCache[1].clientY - evCache[0].clientY;
+					startState.dist = Math.hypot(dx, dy);
+					
+					startState.midX = (evCache[0].clientX + evCache[1].clientX) / 2;
+					startState.midY = (evCache[0].clientY + evCache[1].clientY) / 2;
+				}
+			});
+
+			container.addEventListener('pointermove', e => {
+				const idx = evCache.findIndex(c => c.pointerId === e.pointerId);
+				if (idx > -1) evCache[idx] = e;
+				else return;
+
+				if (evCache.length === 2 && mode === 'PINCH') {
+					// --- Pinch Zoom ---
+					const dx = evCache[1].clientX - evCache[0].clientX;
+					const dy = evCache[1].clientY - evCache[0].clientY;
+					const newDist = Math.hypot(dx, dy);
+					const newMidX = (evCache[0].clientX + evCache[1].clientX) / 2;
+					const newMidY = (evCache[0].clientY + evCache[1].clientY) / 2;
+
+					if (startState.dist < 10) return;
+
+					const zoomRatio = newDist / startState.dist;
+					let newScale = startState.scale * zoomRatio;
+					newScale = Math.max(0.5, Math.min(newScale, 5.0));
+
+					// Calc Pan to keep center under fingers
+					const rect = container.getBoundingClientRect();
+					const cx = rect.left + rect.width / 2;
+					const cy = rect.top + rect.height / 2;
+
+					const effectiveRatio = newScale / startState.scale;
+					const vecX = startState.midX - (cx + startState.imgX);
+					const vecY = startState.midY - (cy + startState.imgY);
+					const moveX = newMidX - startState.midX;
+					const moveY = newMidY - startState.midY;
+
+					imgTransform.scale = newScale;
+					imgTransform.x = startState.imgX + moveX - (vecX * effectiveRatio - vecX);
+					imgTransform.y = startState.imgY + moveY - (vecY * effectiveRatio - vecY);
+					
+					updateImgElement();
+
+				} else if (evCache.length === 1) {
+					const dx = e.clientX - startState.midX;
+					const dy = e.clientY - startState.midY;
+
+					if (mode === 'SWIPE') {
+						// --- Swipe (Track Move) ---
+						// Resistance at edges could be added here
+						trackTransform.x = startState.trackX + dx;
+						updateTrackElement();
+					} else if (mode === 'ZOOM_PAN') {
+						// --- Pan (Image Move) ---
+						imgTransform.x = startState.imgX + dx;
+						imgTransform.y = startState.imgY + dy;
+						updateImgElement();
+					}
+				}
+			});
+
+			const endGesture = (e) => {
+				const idx = evCache.findIndex(c => c.pointerId === e.pointerId);
+				if (idx > -1) {
+					evCache.splice(idx, 1);
+					container.releasePointerCapture(e.pointerId);
+				}
+
+				if (evCache.length === 0) {
+					if (mode === 'SWIPE') {
+						handleSwipeEnd();
+					} else {
+						snapBackImage();
+					}
+					mode = 'NONE';
+				} else if (evCache.length === 1) {
+					// If transitioning from 2 fingers to 1, reset start point to avoid jumps
+					startState.midX = evCache[0].clientX;
+					startState.midY = evCache[0].clientY;
+					startState.imgX = imgTransform.x;
+					startState.imgY = imgTransform.y;
+					startState.trackX = trackTransform.x;
+					// Keep previous mode unless it was PINCH, then revert to ZOOM_PAN
+					if (mode === 'PINCH') mode = 'ZOOM_PAN';
+				}
+			};
+
+			container.addEventListener('pointerup', endGesture);
+			container.addEventListener('pointercancel', endGesture);
+			container.addEventListener('pointerleave', endGesture);
+
+			// --- Logic: Swipe End (Change Image) ---
+			function handleSwipeEnd() {
+				const threshold = container.offsetWidth * 0.25; // 25% width to trigger
+				const tx = trackTransform.x;
+
+				if (tx > threshold && state.detail.index > 0) {
+					// Swipe Right -> Prev
+					animateSwipe(container.offsetWidth, -1);
+				} else if (tx < -threshold && state.detail.index < state.images.length - 1) {
+					// Swipe Left -> Next
+					animateSwipe(-container.offsetWidth, 1);
+				} else {
+					// Snap back
+					trackTransform.x = 0;
+					updateTrackElement(300);
+				}
+			}
+
+			function animateSwipe(targetX, dir) {
+				trackTransform.x = targetX;
+				updateTrackElement(200);
+
+				// Wait for animation, then swap
+				setTimeout(() => {
+					state.detail.index += dir;
+					ui.updateDetailView();
+					
+					// Reset Track instantly
+					track.style.transition = 'none';
+					trackTransform.x = 0;
+					track.style.transform = 'translate(0, 0)';
+				}, 200);
+			}
+
+			// --- Logic: Image Snap Back (Bounds) ---
+			function snapBackImage() {
+				let corrected = false;
+				const rect = container.getBoundingClientRect();
+
+				if (imgTransform.scale < 1) {
+					imgTransform = { x: 0, y: 0, scale: 1 };
+					corrected = true;
+				} else {
+					const w = rect.width * imgTransform.scale;
+					const h = rect.height * imgTransform.scale;
+					const maxX = (w - rect.width) / 2;
+					const maxY = (h - rect.height) / 2;
+
+					if (imgTransform.x > maxX) { imgTransform.x = maxX; corrected = true; }
+					else if (imgTransform.x < -maxX) { imgTransform.x = -maxX; corrected = true; }
+
+					if (imgTransform.y > maxY) { imgTransform.y = maxY; corrected = true; }
+					else if (imgTransform.y < -maxY) { imgTransform.y = -maxY; corrected = true; }
+				}
+
+				if (corrected) updateImgElement(300);
+			}
+
+			// --- Logic: Wheel Zoom ---
+			container.addEventListener('wheel', e => {
+				e.preventDefault();
+				const delta = -e.deltaY * 0.001;
+				const factor = Math.pow(10, delta);
+				let newScale = Math.max(0.5, Math.min(imgTransform.scale * factor, 5.0));
+				
+				const rect = container.getBoundingClientRect();
+				const dx = (e.clientX - rect.left) - rect.width/2;
+				const dy = (e.clientY - rect.top) - rect.height/2;
+				const effectiveFactor = newScale / imgTransform.scale;
+
+				imgTransform.x -= (dx - imgTransform.x) * (effectiveFactor - 1);
+				imgTransform.y -= (dy - imgTransform.y) * (effectiveFactor - 1);
+				imgTransform.scale = newScale;
+
+				updateImgElement();
+				clearTimeout(window.wheelSnapTimer);
+				window.wheelSnapTimer = setTimeout(snapBackImage, 300);
+			}, { passive: false });
+
+			// --- Logic: Click/Double Click ---
+			let lastTap = 0;
+			container.addEventListener('click', (e) => {
+				// Don't click if moved significantly
+				const dist = Math.hypot(e.clientX - startState.midX, e.clientY - startState.midY);
+				if (dist > 10) return;
+
+				const now = Date.now();
+				if (now - lastTap < 300) {
+					// Double Click Reset
+					imgTransform = { x: 0, y: 0, scale: 1 };
+					trackTransform = { x: 0 };
+					updateImgElement(300);
+					updateTrackElement(300);
+					lastTap = 0;
+					return;
+				}
+				lastTap = now;
+
+				// Background Click -> Close
+				// Check if clicked strictly outside the image rect
+				// (Simplified: if scale is 1, image is basically filling or contained. 
+				//  Just use the fact that we handled interaction above)
+				// If we want "Click outside image closes":
+				// We need current image rect.
+				// For now, let's keep the close button as primary or FAB.
+				// But original requirement had "Background click".
+				// Since we support swiping, a single tap is ambiguous. 
+				// Let's rely on the Close Button/FAB for now to prevent accidental closes during interaction.
+			});
+
+			// External Reset
+			state.detail.reset = () => {
+				imgTransform = { x: 0, y: 0, scale: 1 };
+				trackTransform = { x: 0 };
+				updateImgElement();
+				updateTrackElement();
+			};
+		}
+
+		// --- API & Search ---
+			const api = {
+				async search(query, limit) {
+					const postSearch = async (qText, images) => {
+						const fd = new FormData();
+						if (qText) fd.append('q', qText);
+						fd.append('limit', String(limit));
+						(images || []).forEach(ref => {
+							fd.append('image', ref.blob, 'ref.jpg');
+							fd.append('image_weight', String(ref.weight));
+						});
+						const res = await fetch(`${API_BASE}/API/search`, { method: 'POST', body: fd });
+						if (!res.ok) throw new Error(`HTTP ${res.status}`);
+						return await res.json();
+					};
+
+					try {
+						let data = await postSearch(query.text, query.images);
+						// Fallback: avoid returning empty list to UI
+						if (!Array.isArray(data) || data.length === 0) {
+							data = await postSearch(null, []);
+						}
+						return Array.isArray(data) ? data : [];
+					} catch { return []; }
+				},
+			async getTags(id) {
+				try {
+					const res = await fetch(`${API_BASE}/API/tags_from_id/${id}`);
+					return await res.json();
+				} catch { return []; }
+			},
+				async getTagSuggestions(prefix) {
+					try {
+						const res = await fetch(`${API_BASE}/API/tags?prefix=${encodeURIComponent(prefix)}`);
+						const data = await res.json();
+						if (Array.isArray(data) && data.length > 0) return data;
+						return prefix ? [[prefix, 0, 0]] : [];
+					} catch { return []; }
+				},
+			async getBlob(id) {
+				const res = await fetch(`${API_BASE}/API/media/${id}`);
+				return await res.blob();
+			}
+		};
+
+		const searchManager = {
+			addRef(blob, weight = 1.0) {
+				state.searchRefs.push({ blob, weight, url: URL.createObjectURL(blob) });
+				this.renderRefs();
+			},
+			removeRef(idx) {
+				state.searchRefs.splice(idx, 1);
+				this.renderRefs();
+			},
+			handleFileUpload(input) {
+				if (input.files) Array.from(input.files).forEach(f => this.addRef(f));
+				input.value = '';
+			},
+			renderRefs() {
+				const c = document.getElementById('reference-list');
+				const empty = document.getElementById('empty-refs');
+				while (c.children.length > 1) { c.removeChild(c.lastChild); }
+				if (state.searchRefs.length === 0) {
+					empty.classList.remove('hidden'); empty.classList.add('flex');
+				} else {
+					empty.classList.add('hidden'); empty.classList.remove('flex');
+					state.searchRefs.forEach((ref, i) => {
+						const el = document.createElement('div');
+						el.className = 'bg-black/40 p-3 rounded-xl border border-ui-border flex gap-3 animate-fade-in items-center';
+						el.innerHTML = `
+                            <img src="${ref.url}" class="w-14 h-14 object-cover rounded-lg bg-gray-800 shrink-0">
+                            <div class="flex-1 min-w-0">
+                                <input type="range" min="-1" max="1" step="0.1" value="${ref.weight}" 
+                                    class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-brand"
+                                    oninput="state.searchRefs[${i}].weight = this.value; this.nextElementSibling.innerText = this.value">
+                                <div class="text-[10px] text-gray-500 font-bold mt-1 text-right">${ref.weight}</div>
+                            </div>
+                            <button onclick="searchManager.removeRef(${i})" class="text-gray-500 hover:text-red-400 p-2"><i class="fa-solid fa-trash-can"></i></button>
+                        `;
+						c.appendChild(el);
+					});
+				}
+			},
+			executeSearch() {
+				ui.closeSearchModal();
+				ui.setStatus('Searching...');
+				const text = document.getElementById('search-text').value;
+				const limit = document.getElementById('search-limit').value;
+
+				document.getElementById('search-suggestions').classList.add('hidden');
+
+				api.search({ text, images: state.searchRefs }, limit).then(results => {
+					state.images = results.map((entry, idx) => {
+						const c = getSpiralCoord(idx);
+						return { id: entry.id || entry, gx: c.x, gy: c.y, loaded: false, loading: false };
+					});
+					ui.setStatus(`${results.length} RESULTS`);
+					app.resetView();
+				});
+			},
+			addTagToSearch(tag) {
+				const input = document.getElementById('search-text');
+				const current = input.value.trim();
+				if (!current.includes(tag)) {
+					input.value = current ? `${current} ${tag}` : tag;
+				}
+				ui.closeTagsModal();
+				ui.closeDetailModal();
+				ui.openSearchModal();
+			},
+			setupAutocomplete() {
+				const input = document.getElementById('search-text');
+				const suggestionsBox = document.getElementById('search-suggestions');
+				let debounceTimer;
+
+				input.addEventListener('input', (e) => {
+					clearTimeout(debounceTimer);
+					const val = input.value;
+					const words = val.split(' ');
+					const lastWord = words[words.length - 1];
+
+					if (lastWord.length < 2) {
+						suggestionsBox.classList.add('hidden');
+						return;
+					}
+
+					debounceTimer = setTimeout(async () => {
+						const tags = await api.getTagSuggestions(lastWord);
+						if (tags.length === 0) {
+							suggestionsBox.classList.add('hidden');
+							return;
+						}
+						suggestionsBox.innerHTML = '';
+						tags.forEach(tagData => {
+							const tagName = tagData[0];
+							const count = tagData[2];
+							const item = document.createElement('div');
+							item.className = 'px-4 py-3 hover:bg-white/10 cursor-pointer flex justify-between items-center border-b border-white/5 last:border-0';
+							item.innerHTML = `
+								<span class="text-gray-200 font-medium">${tagName}</span>
+								<span class="text-xs text-gray-500 bg-black/30 px-2 py-0.5 rounded-full">${count}</span>
+							`;
+							item.onclick = () => {
+								words[words.length - 1] = tagName;
+								input.value = words.join(' ') + ' ';
+								suggestionsBox.classList.add('hidden');
+								input.focus();
+							};
+							suggestionsBox.appendChild(item);
+						});
+						suggestionsBox.classList.remove('hidden');
+					}, 200);
+				});
+
+				input.addEventListener('blur', () => {
+					setTimeout(() => suggestionsBox.classList.add('hidden'), 200);
+				});
+			}
+		};
+
+		// --- Preloader Function ---
+		function preloadNeighbors(index) {
+			// Preload 3 prev and 3 next
+			const range = 3;
+			for (let i = 1; i <= range; i++) {
+				// Next
+				if (index + i < state.images.length) {
+					const id = state.images[index + i].id;
+					new Image().src = `${API_BASE}/API/media/${id}`;
+				}
+				// Prev
+				if (index - i >= 0) {
+					const id = state.images[index - i].id;
+					new Image().src = `${API_BASE}/API/media/${id}`;
+				}
+			}
+		}
+
+		const ui = {
+			openSearchModal: () => {
+				document.getElementById('search-modal').classList.remove('hidden');
+				setTimeout(() => document.getElementById('search-text').focus(), 100);
+			},
+			closeSearchModal: () => document.getElementById('search-modal').classList.add('hidden'),
+
+			openDetailModal: (id) => {
+				// Find Index
+				const index = state.images.findIndex(img => img.id === id);
+				if (index === -1) return;
+				
+				state.detail.index = index;
+				document.getElementById('detail-modal').classList.remove('hidden');
+				
+				if (state.detail.reset) state.detail.reset();
+				ui.updateDetailView();
+			},
+
+			// Handles Image Loading & Neighbors
+			updateDetailView: () => {
+				const index = state.detail.index;
+				const imgData = state.images[index];
+				state.currentId = imgData.id;
+
+				const img = document.getElementById('detail-image');
+				const thumb = document.getElementById('detail-image-thumb');
+				const loader = document.getElementById('detail-loading');
+				const prevImg = document.getElementById('detail-prev-image');
+				const nextImg = document.getElementById('detail-next-image');
+
+				document.getElementById('detail-id').innerText = imgData.id;
+
+				// Reset Main Image State
+				loader.classList.remove('hidden');
+				img.classList.add('opacity-0');
+				thumb.classList.remove('opacity-0');
+				thumb.src = `${API_BASE}/API/media/${imgData.id}?size=${CONFIG.thumbSize}`;
+
+				// Load Main High Res
+				const hiRes = new Image();
+				hiRes.src = `${API_BASE}/API/media/${imgData.id}`;
+				hiRes.onload = () => {
+					img.src = hiRes.src;
+					img.classList.remove('opacity-0');
+					thumb.classList.add('opacity-0');
+					loader.classList.add('hidden');
+				};
+
+				// Set Neighbors (Ghost Images)
+				if (index > 0) {
+					prevImg.src = `${API_BASE}/API/media/${state.images[index - 1].id}`;
+					prevImg.style.display = 'block';
+				} else {
+					prevImg.style.display = 'none';
+				}
+
+				if (index < state.images.length - 1) {
+					nextImg.src = `${API_BASE}/API/media/${state.images[index + 1].id}`;
+					nextImg.style.display = 'block';
+				} else {
+					nextImg.style.display = 'none';
+				}
+
+				// Trigger Preload
+				preloadNeighbors(index);
+			},
+
+			closeDetailModal: () => {
+				document.getElementById('detail-modal').classList.add('hidden');
+				ui.closeTagsModal();
+			},
+
+			async openTagsModal() {
+				if (!state.currentId) return;
+				const m = document.getElementById('tags-modal');
+				const list = document.getElementById('tags-list');
+				m.classList.remove('hidden');
+
+				list.innerHTML = '<div class="w-full text-center py-4"><div class="loader mx-auto"></div></div>';
+
+				try {
+					const tags = await api.getTags(state.currentId);
+					list.innerHTML = '';
+					if (tags.length === 0) list.innerHTML = '<div class="text-gray-500 w-full text-center py-4">No tags detected</div>';
+
+					tags.forEach(t => {
+						const el = document.createElement('button');
+						const hue = Math.max(0, Math.min(120, Math.round(t.probability * 120)));
+						const pct = Math.round(t.probability * 100);
+						el.className = 'px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 hover:scale-105 active:scale-95 transition-all border';
+						el.style.cssText = `
+							background: hsla(${hue}, 70%, 20%, 0.4);
+							border-color: hsla(${hue}, 70%, 40%, 0.5);
+							color: hsl(${hue}, 80%, 85%);
+						`;
+						el.innerHTML = `<span class="font-medium">${t.tag_name}</span><span class="font-mono text-xs opacity-70">${pct}%</span>`;
+						el.onclick = () => searchManager.addTagToSearch(t.tag_name);
+						list.appendChild(el);
+					});
+				} catch {
+					list.innerHTML = '<div class="text-red-400">Failed to load tags</div>';
+				}
+			},
+			closeTagsModal: () => document.getElementById('tags-modal').classList.add('hidden'),
+
+			addCurrentToSearch: async () => {
+				if (!state.currentId) return;
+				ui.toast('Downloading...');
+				try {
+					const blob = await api.getBlob(state.currentId);
+					searchManager.addRef(blob);
+					ui.closeDetailModal();
+					ui.openSearchModal();
+					ui.toast('Added to search');
+				} catch { ui.toast('Download failed', true); }
+			},
+
+			setStatus: (msg) => document.getElementById('status-indicator').innerText = msg.toUpperCase(),
+			toast: (msg, error = false) => {
+				const t = document.getElementById('toast');
+				document.getElementById('toast-msg').innerText = msg;
+				t.querySelector('i').className = error ? 'fa-solid fa-triangle-exclamation text-red-500' : 'fa-solid fa-circle-check text-green-400';
+				t.classList.remove('opacity-0', 'translate-y-[-20px]', 'scale-90');
+				setTimeout(() => t.classList.add('opacity-0', 'translate-y-[-20px]', 'scale-90'), 2500);
+			}
+		};
+
+		const app = {
+			resetView: () => {
+				state.camera = { x: 0, y: 0, z: CONFIG.initialZoom, vx: 0, vy: 0 };
+				state.inertia.active = false;
+				render();
+			}
+		};
+
+		function setupFabInteractions() {
+			const trigger = document.getElementById('fab-trigger');
+			const menu = document.getElementById('fab-menu');
+			const optRef = document.getElementById('fab-opt-ref');
+			const optTags = document.getElementById('fab-opt-tags');
+			const optClose = document.getElementById('fab-opt-close');
+
+			const options = [
+				{ el: optRef, action: () => ui.addCurrentToSearch() },
+				{ el: optTags, action: () => ui.openTagsModal() },
+				{ el: optClose, action: () => ui.closeDetailModal() }
+			];
+
+			let longPressTimer = null;
+			let isMenuOpen = false;
+			let activeOption = null;
+			let rects = [];
+
+			const openMenu = () => {
+				isMenuOpen = true;
+				menu.classList.remove('opacity-0', 'translate-y-4', 'pointer-events-none', 'scale-90');
+				trigger.classList.add('scale-75', 'opacity-50');
+				if (navigator.vibrate) { try { navigator.vibrate(70); } catch (e) { } }
+				rects = options.map(opt => ({
+					item: opt,
+					rect: opt.el.getBoundingClientRect()
+				}));
+			};
+
+			const closeMenu = () => {
+				isMenuOpen = false;
+				activeOption = null;
+				menu.classList.add('opacity-0', 'translate-y-4', 'pointer-events-none', 'scale-90');
+				trigger.classList.remove('scale-75', 'opacity-50');
+				options.forEach(o => o.el.classList.remove('active'));
+			};
+
+			trigger.addEventListener('pointerdown', (e) => {
+				trigger.setPointerCapture(e.pointerId);
+				longPressTimer = setTimeout(() => {
+					openMenu();
+				}, 200);
+			});
+
+			trigger.addEventListener('pointermove', (e) => {
+				if (!isMenuOpen) return;
+				const x = e.clientX;
+				const y = e.clientY;
+				let found = null;
+				for (const data of rects) {
+					const r = data.rect;
+					if (x >= r.left - 20 && x <= r.right + 20 && y >= r.top - 10 && y <= r.bottom + 10) {
+						found = data.item;
+						break;
+					}
+				}
+				if (activeOption !== found) {
+					if (activeOption) activeOption.el.classList.remove('active');
+					if (found) {
+						found.el.classList.add('active');
+						if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) { } }
+					}
+					activeOption = found;
+				}
+			});
+
+			const endInteraction = (e) => {
+				clearTimeout(longPressTimer);
+				trigger.releasePointerCapture(e.pointerId);
+				if (isMenuOpen) {
+					if (activeOption) activeOption.action();
+					closeMenu();
+				}
+			};
+
+			trigger.addEventListener('pointerup', endInteraction);
+			trigger.addEventListener('pointercancel', (e) => {
+				clearTimeout(longPressTimer);
+				closeMenu();
+			});
+			trigger.addEventListener('contextmenu', e => e.preventDefault());
+		}
+		window.addEventListener('resize', initCanvas);
+		window.addEventListener('load', () => {
+			initCanvas();
+			setupGalleryInteractions();
+			setupDetailInteractions();
+			setupFabInteractions();
+			searchManager.setupAutocomplete();
+			searchManager.executeSearch();
+		});
+	</script>
+</body>
+
+</html>

@@ -1,0 +1,21 @@
+[project]
+name = "booru-viewer"
+version = "0.1.0"
+description = "Danbooru viewer with reusable vector index"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "python-multipart",
+  "httpx",
+  "h2",
+  "numpy",
+  "faiss-cpu",
+  "pyarrow",
+  "timm",
+  "torch",
+  "torchvision",
+  "pillow",
+  "pydantic"
+]
