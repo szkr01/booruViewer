@@ -14,3 +14,5 @@
 /data/incoming/
 
 /docs/*
+
+*.pyc

@@ -1,5 +1,15 @@
 # Lessons
 
+- 2026-03-08: collector の hot path に `sorted(set(...))` のような state compaction を入れると、画像処理と無関係に CPU スパイクして throughput が落ちる。
+- 再発防止ルール:
+  - state は探索ループ中に append/update のみ行い、unique/sort/truncate は保存時だけ実行する。
+  - state 保存の責務は caller 側に散らさず、保存層で compaction を一元化する。
+
+- 2026-03-08: 区間探索の改善で throughput 問題が出たら、まず hot path に DB 判定や区間探索が混ざっていないかを疑う。
+- 再発防止ルール:
+  - collector は「区間決定」と「区間消化」を分離し、消化中に DB 存在確認を入れない。
+  - 長時間ジョブの 1 サイクルで複数区間をまたがらせず、1区間完了で次サイクルへ返す。
+
 - 2026-03-08: legacy 資産の `vectors_raw.npy` は、拡張子が `.npy` でも実体が NumPy コンテナとは限らない。旧 ILEMB では raw float16 バイナリがその名前で置かれている場合がある。
 - 再発防止ルール:
   - legacy ファイルはヘッダやサイズを確認し、拡張子だけで形式を決め打ちしない。

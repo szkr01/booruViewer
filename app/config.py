@@ -47,6 +47,8 @@ class Settings:
     ingest_http_retry_backoff: float
     ingest_http_block_cooldown_sec: float
     collector_phase_budget_sec: float
+    sync_gap_threshold: int
+    sync_probe_step: int
     danbooru_api_base: str
     require_cuda_for_ingest: bool
     build_index_checkpoint_every: int
@@ -108,6 +110,8 @@ class SettingsLoader:
         ingest_http_retry_backoff = float(config.get("ingest_http_retry_backoff", 1.8))
         ingest_http_block_cooldown_sec = float(config.get("ingest_http_block_cooldown_sec", 2.0))
         collector_phase_budget_sec = float(config.get("collector_phase_budget_sec", 300.0))
+        sync_gap_threshold = int(config.get("sync_gap_threshold", 400))
+        sync_probe_step = int(config.get("sync_probe_step", 64))
         danbooru_api_base = str(config.get("danbooru_api_base", "https://danbooru.donmai.us"))
         require_cuda_for_ingest = bool(config.get("require_cuda_for_ingest", True))
         build_index_checkpoint_every = int(config.get("build_index_checkpoint_every", 20))
@@ -153,6 +157,8 @@ class SettingsLoader:
             ingest_http_retry_backoff=ingest_http_retry_backoff,
             ingest_http_block_cooldown_sec=ingest_http_block_cooldown_sec,
             collector_phase_budget_sec=collector_phase_budget_sec,
+            sync_gap_threshold=sync_gap_threshold,
+            sync_probe_step=sync_probe_step,
             danbooru_api_base=danbooru_api_base,
             require_cuda_for_ingest=require_cuda_for_ingest,
             build_index_checkpoint_every=build_index_checkpoint_every,

@@ -1,5 +1,120 @@
 # Implementation Plan
 
+## Replan (2026-03-08, Save-Time State Compaction)
+
+- [x] `sync_posts` のホットパスから `sync_failures` の `set/sort/truncate` を外し、push のみへ寄せる
+- [x] `build_state.save()` に compaction を集約し、保存時だけ重い state 整理を実行する
+- [x] build_state テストを追加し、保存時 compaction を検証する
+- [x] README の state 保存説明を現挙動に合わせる
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `app/build_state.py` に `BuildState.compact()` を追加し、`sync_failures` の unique/sort/truncate と `pending_ranges` の正規化/重複除去を保存時に集約
+  - `app/sync_posts.py` からホットパスの `sorted(set(state.sync_failures))[-5000:]` を除去し、探索中は append と cursor 更新だけを行うよう整理
+  - `README.md` の `ingest_state_save_interval_sec` 説明を、重い整理は保存タイミング時のみという挙動に更新
+- 検証:
+  - `python3 -m unittest tests.test_build_state` 成功
+  - `python3 -m compileall app tests` 成功
+- 未実施:
+  - Windows 側 `database.bat` での実 throughput 比較
+  - 実 Danbooru API に対する長時間 collector 実行
+
+## Replan (2026-03-08, Interval Queue Collector)
+
+- [x] `build_state` を `pending_ranges` キュー中心へ変更し、旧 `active_gap_*` は読込互換だけ残す
+- [x] `sync_posts` を `plan_ranges -> consume_single_range` 構造へ再編し、探索中の DB 存在確認を除去する
+- [x] 1サイクル1区間の消化に固定し、range planning と ingest のログ/計測を分離する
+- [x] state 互換と gap finder の検証を再実施し、レビュー欄に記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `app/build_state.py` に `PendingRange` と `pending_ranges` を追加し、collector 再開状態を単一 active gap ではなく区間キューとして保存する形へ変更
+  - 旧 `active_gap_upper_id` / `active_gap_lower_id` / `active_gap_cursor_id` は load 互換だけ残し、既存 state から自動で `pending_ranges[0]` へ昇格するようにした
+  - `app/sync_posts.py` は `plan_pending_ranges()` で次の区間を決め、`range_consume` でキュー先頭の1区間だけ処理する構造へ変更
+  - 区間消化中の `db.existing_ids()` を除去し、DB 参照は planner の probe と起動時 stats のみに限定した
+  - 1サイクル1区間に固定し、区間完了後は次サイクルへ返すことで同一 run 内の再計画を止めた
+  - `README.md` を更新し、`pending_ranges` / `probe_resume_id` ベースの collector 動作へ説明を合わせた
+- 検証:
+  - `python3 -m compileall app tests` 成功
+  - `python3 -m unittest tests.test_gap_finder tests.test_build_state` 成功
+  - `rg -n "active_gap_|pending_ranges|existing_ids\\(" app README.md tests` で collector 本体から旧 active-gap 依存と区間消化中の DB 存在確認が外れていることを確認
+- 未実施:
+  - 実 Danbooru API に対する長時間 collector 実行
+  - Windows 側 `database.bat` での実 throughput 比較
+
+## Replan (2026-03-08, Persistent Gap State)
+
+- [x] `build_state` に active gap と probe 再開位置を追加し、毎サイクルの全再探索を止める
+- [x] `sync_posts` を「新着 gap の即時確認 + active gap 継続 + 古い側 probe 再開」へ変更する
+- [x] gap 完了時の state 更新とログを整理し、遅化の原因になっているフル再探索を除去する
+- [x] 静的検証と gap finder テストを再実施し、レビュー欄に記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `app/build_state.py` に `active_gap_upper_id` / `active_gap_lower_id` / `active_gap_cursor_id` / `probe_resume_id` を追加し、collector 再開状態を保存
+  - `app/sync_posts.py` は「新着 gap を最初に確認」「active gap があればその cursor から継続」「無ければ `probe_resume_id` から次の古い gap を1件だけ探索」の流れへ変更
+  - これにより毎サイクルの gap 全再探索をやめ、途中中断時も同じ gap の途中ページから再開するよう修正
+  - `README.md` を更新し、`active_gap` / `probe_resume` による継続動作を明記
+- 検証:
+  - `python3 -m compileall app tests` 成功
+  - `python3 -m unittest tests.test_gap_finder` 成功
+  - `python3 -c "... BuildStateStore round-trip ..."` で新規 state 項目の保存/復元を確認
+- 未実施:
+  - 実 Danbooru API に対する長時間 collector 実行
+  - Windows 側 `database.bat` 実運用でのサイクル跨ぎ再開確認
+
+## Replan (2026-03-08, Sparse-Probe Gap Detection)
+
+- [x] `sync_posts` の逐次 `covered/missing` 判定をやめ、疎プローブで未取得帯を見つける方式へ置き換える
+- [x] DB に `prev_existing_id` / `next_existing_id` を追加し、探索段階で API を使わない構造にする
+- [x] `sync_probe_step` 設定と README 説明を追加し、旧 `sync_tracker` 実装を除去する
+- [x] gap finder のテストと静的検証を実施し、レビュー欄に記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `app/gap_finder.py` を追加し、`prev_existing_id(p)` / `next_existing_id(p)` を使う疎プローブ型の未取得帯探索を実装
+  - `app/sync_posts.py` を「探索はDBプローブ、取得は確定gapだけAPI」の流れへ変更し、全件API走査と `sync_tracker` 依存を削除
+  - `app/database.py` に `prev_existing_id()` と `next_existing_id()` を追加
+  - `app/config.py` / `config.json` / `README.md` に `sync_probe_step` を追加し、collector の説明を更新
+  - 旧 `app/sync_tracker.py` と `tests/test_sync_tracker.py` を削除し、`tests/test_gap_finder.py` へ置き換え
+- 検証:
+  - `python3 -m unittest tests.test_gap_finder` 成功
+  - `python3 -m compileall app tests` 成功
+- 未実施:
+  - 実 Danbooru API に対する長時間 collector 実行
+  - Windows 側 `database.bat` 実運用経路での gap 検出確認
+
+## Replan (2026-03-08, Latest-Downward Gap-State Collector)
+
+- [x] `sync_posts` を「最新起点 + covered/missing 状態機械」へ置き換える
+- [x] build state から探索カーソル依存を外し、互換読込だけ残す
+- [x] `sync_gap_threshold` 設定と README 説明を追加する
+- [x] 判定ロジックのテストを追加し、静的検証とあわせてレビュー欄に記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `app/sync_tracker.py` を追加し、`covered` / `missing` の状態遷移と連続長判定を純粋ロジックとして分離
+  - `app/sync_posts.py` を「毎サイクル最新 head から再走査」へ変更し、ID ギャップも含めて `sync_gap_threshold` 件以上の未取得帯だけを収集するよう修正
+  - `app/build_state.py` は `sync_failures` のみを保存し、旧 `sync_cursor_id` / `latest_cursor_id` は読込互換だけ残す形に整理
+  - `app/config.py` / `config.json` / `README.md` に `sync_gap_threshold` を追加し、collector 挙動を更新
+  - `tests/test_sync_tracker.py` を追加し、状態遷移と複数帯の繰り返しを検証
+- 検証:
+  - `python3 -m compileall app tests` 成功
+  - `python3 -m unittest tests.test_sync_tracker` 成功
+- 未実施:
+  - 実 Danbooru API に対する長時間 collector 実行
+  - Windows 側 `database.bat` の実運用経路確認
+
 ## Replan (2026-03-08, Ingest Preprocess Pipeline)
 
 - [x] `TagEngine` を前処理 API と forward API に分割し、前処理済み tensor を直接 forward できるようにする

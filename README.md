@@ -16,9 +16,12 @@ setup.bat
    - 必須ファイル: `search_ivfpq.index`, `metadata.npy`, `id_map.npy`
    - `vectors_raw.npy` がある場合は `vectors_raw.f16` に変換して取り込みます
 3. `database.bat` を実行して常駐させる。起動中は以下を繰り返し自動実行
-   - 単一 collector (`app.sync_posts`) が最新から古い側へ探索し、既取得IDを飛ばして未取得IDだけを収集
+   - 単一 collector (`app.sync_posts`) は state の `pending_ranges` から1区間だけ選び、その区間の取得に集中する
+   - `pending_ranges` が空のときだけ、最新 head と DB を使って次の未取得区間を計画する
+   - 古い側の gap 探索は `probe_resume_id` から継続し、`sync_probe_step` 間隔の疎プローブで少数区間だけ補充する
+   - 区間消化中は DB 存在確認を行わず、確定済み区間の投稿だけ API で取得する
    - parquetからの増分同期 (`app.build_index`)
-   - collector は `collector_phase_budget_sec` の範囲で進み、毎サイクル `build_index` まで到達する
+   - collector は `collector_phase_budget_sec` の範囲で1区間を進め、途中位置は `cursor_id` として保存して次サイクルで再開する
 4. `app.bat` を実行
 5. ブラウザで `http://localhost:8002/app` を開く
 
@@ -29,7 +32,7 @@ setup.bat
 - `legacy_cache_dirs`: `app.migrate_legacy` を直接実行する場合の既存キャッシュ探索先
 - `parquet_glob`: 既存キャッシュがない場合に取り込むparquetのglob
 - `db_path`, `faiss_index_path`, `vectors_raw_path`: 出力先
-- `ingest_state_save_interval_sec`: state 永続化間隔（デフォルト300秒）。件数基準では保存しません
+- `ingest_state_save_interval_sec`: state 永続化間隔（デフォルト300秒）。探索ループ中は軽量更新だけ行い、`sync_failures` の重複除去やソートなどの重い整理はこの保存タイミングと終了時だけ実行します
 - `ingest_batch_size`: 収集済み行を parquet へ flush する単位。GPU 推論バッチサイズではありません
 - `ingest_roll_max_rows`, `ingest_roll_max_mib`: 収集parquetのローテーション条件
 - `ingest_download_workers*`: ダウンロード並列数と自動調整範囲
@@ -39,7 +42,9 @@ setup.bat
 - `ingest_embed_max_wait_ms`: 推論キューを時間で flush する上限待ち時間
 - `ingest_embed_autocast`: CUDA 推論時に autocast(fp16) を使うか
 - `ingest_media_http2`: 画像ダウンロードで HTTP/2 を使うか。既定は `false` で、worker ごとの複数接続を優先します
-- `collector_phase_budget_sec`: 単一 collector が1サイクルで使う時間予算。未完了分は次サイクルで再開
+- `collector_phase_budget_sec`: 単一 collector が1サイクルで使う時間予算。時間切れ時は `pending_ranges[].cursor_id` と `probe_resume_id` を保存して次サイクルで継続します
+- `sync_gap_threshold`: `p - prev_existing_id(p)` がこの値以上なら未取得帯候補とみなします
+- `sync_probe_step`: gap 探索で使う ID プローブ間隔。`sync_gap_threshold` より小さく保ちます
 - `docs/` 配下は参照しません。実データのパスを明示指定してください。
 
 ## API互換

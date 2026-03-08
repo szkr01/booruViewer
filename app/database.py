@@ -150,6 +150,24 @@ class Database:
             row = cursor.fetchone()
             return int(row[0]) if row else None
 
+    def prev_existing_id(self, id_upper: int) -> int | None:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT id FROM posts WHERE id <= ? ORDER BY id DESC LIMIT 1",
+                (int(id_upper),),
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row else None
+
+    def next_existing_id(self, id_lower: int) -> int | None:
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "SELECT id FROM posts WHERE id >= ? ORDER BY id ASC LIMIT 1",
+                (int(id_lower),),
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row else None
+
     def max_vec_idx(self) -> int:
         with self.connection() as conn:
             cursor = conn.execute("SELECT COALESCE(MAX(vec_idx), -1) FROM posts")
