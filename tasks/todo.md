@@ -1,5 +1,23 @@
 # Implementation Plan
 
+## Replan (2026-03-08, Predicted Tags Visual Tone)
+
+- [x] `web_local/index.html` の Predicted Tags 描画位置と既存スタイルを確認する
+- [x] 緑から赤へ寄る、優しい色合いの背景グラデ付きタグチップへ調整する
+- [x] 差分を見直し、表示ロジックが崩れていないか確認して review を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `web_local/index.html` に `predicted-tag-chip` を追加し、装飾を削ったシンプルな角丸チップへ調整
+  - Predicted Tags の色計算を、確率に応じて赤寄りから緑寄りへ動く半透明の単色背景 + 柔らかい枠線 + 白文字へ再調整
+- 検証:
+  - `sed -n` でスタイル定義とタグ生成ロジックの差分を確認
+  - 表示ロジックは既存の click-to-search を維持しており、変更範囲が Predicted Tags の見た目に限定されていることを確認
+- 未実施:
+  - ブラウザでの実画面確認
+
 ## Replan (2026-03-08, Save-Time State Compaction)
 
 - [x] `sync_posts` のホットパスから `sync_failures` の `set/sort/truncate` を外し、push のみへ寄せる

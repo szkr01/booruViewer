@@ -73,6 +73,22 @@
             background: #3f3f46;
             /* zinc-700 */
         }
+
+        .predicted-tag-chip {
+            padding: 0.375rem 0.75rem;
+            border-radius: 9999px;
+            border: 1px solid transparent;
+            font-size: 0.875rem;
+            font-weight: 500;
+            line-height: 1.25rem;
+            color: #fff;
+            cursor: pointer;
+            transition: filter 0.18s ease;
+        }
+
+        .predicted-tag-chip:hover {
+            filter: brightness(0.98);
+        }
     </style>
 </head>
 
@@ -798,27 +814,16 @@
                 tags.forEach(t => {
                     const span = document.createElement('span');
 
-                    // --- 虹色ロジック (シンプル版) ---
-                    // 確率 (0.0 - 1.0) を 色相 (240 - 0) にマッピング
-                    const hue = (1.0 - t.probability) * 240;
+                    const probability = Math.max(0, Math.min(1, Number(t.probability) || 0));
+                    const hue = 8 + probability * 122;
+                    const backgroundColor = `hsla(${hue}, 50%, 38%, 0.42)`;
+                    const borderColor = `hsla(${hue}, 40%, 58%, 0.42)`;
 
-                    // HSLで色を生成
-                    // 背景ではなく、文字と枠線に色をつけます。
-                    // 視認性を良くするため、彩度(S)を抑え、輝度(L)を下げて少し濃くしています。
-                    const colorStyle = `hsl(${hue}, 70%, 45%)`;
+                    span.style.borderColor = borderColor;
+                    span.style.backgroundColor = backgroundColor;
 
-                    span.style.color = "white";          // 文字色は白
-                    span.style.borderColor = colorStyle;      // 枠線色
-                    
-                    span.style.backgroundColor = "rgba(0, 0, 0, 0.1)"; // 背景は薄い黒で統一
-
-                    const percent = (t.probability * 100).toFixed(0);
-
-                    // クラス設定:
-                    // border: 枠線を表示
-                    // bg-transparent: 背景透明
-                    // hover:bg-gray-50: ホバー時にうっすらグレーにしてクリック感を出す
-                    span.className = 'px-3 py-1 rounded-full text-sm font-medium border bg-transparent cursor-pointer hover:bg-gray-50 transition-colors duration-200';
+                    const percent = (probability * 100).toFixed(0);
+                    span.className = 'predicted-tag-chip';
 
                     span.title = `Probability: ${t.probability.toFixed(4)}`;
                     span.textContent = `${t.tag_name} (${percent}%)`;
@@ -935,11 +940,11 @@
             row.className = 'space-y-1';
 
             const labelEl = document.createElement('p');
-            labelEl.className = 'text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400';
+            labelEl.className = 'text-2xs font-bold uppercase tracking-wide text-zinc-500 dark:text-zinc-400';
             labelEl.textContent = label;
 
             const valueEl = document.createElement('p');
-            valueEl.className = 'text-sm text-zinc-800 dark:text-zinc-200 break-words';
+            valueEl.className = 'text-2sm font-bold text-zinc-800 dark:text-zinc-200 break-words';
             valueEl.textContent = Array.isArray(value) ? value.join(', ') : value;
 
             row.appendChild(labelEl);
@@ -953,8 +958,8 @@
             const section = document.createElement('div');
             section.className = 'space-y-4';
 
-            const title = document.createElement('h3');
-            title.className = 'font-bold text-zinc-700 dark:text-zinc-300';
+            const title = document.createElement('h2');
+            title.className = 'text-2xl font-bold text-zinc-700 dark:text-zinc-300';
             title.textContent = 'External Source (Danbooru)';
             section.appendChild(title);
 
@@ -966,7 +971,7 @@
             link.href = postUrl;
             link.target = '_blank';
             link.rel = 'noopener noreferrer';
-            link.className = 'inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-500 hover:underline break-all';
+            link.className = ' font-bold inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-500 hover:underline break-all';
             link.textContent = 'Open in Danbooru';
             section.appendChild(link);
 
