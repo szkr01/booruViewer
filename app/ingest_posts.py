@@ -265,11 +265,18 @@ def choose_image_url(post: dict[str, Any]) -> str | None:
 
 
 def choose_record_url(post: dict[str, Any]) -> str | None:
-    variant = _pick_variant(post, preferred_types={"720x720": 0})
-    if variant:
-        url = variant.get("url")
-        if isinstance(url, str) and url:
-            return _normalize_danbooru_url(url)
+    media_asset = post.get("media_asset")
+    if isinstance(media_asset, dict):
+        variants = media_asset.get("variants")
+        if isinstance(variants, list):
+            for item in variants:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("type", "")) != "720x720":
+                    continue
+                url = item.get("url")
+                if isinstance(url, str) and url:
+                    return _normalize_danbooru_url(url)
     return None
 
 

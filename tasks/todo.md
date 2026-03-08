@@ -525,3 +525,33 @@
 - 検証:
   - `python3 -m compileall app` 成功
   - `sed -n '256,1315p' web_local/index.html > /tmp/booruViewer_index_script.js && node --check /tmp/booruViewer_index_script.js` 成功
+
+## Replan (2026-03-08, sync_posts component_parse_failed)
+
+### Problem Statement
+
+- `database.bat` 実行時の `sync_posts` で `component_parse_failed` が継続発生している。
+- 原因は `choose_record_url()` が `720x720` 記録URLの選定に `_pick_variant()` を流用しており、縦長画像では `sample` を拾ってしまうこと。
+- `sample-<md5>.jpg` URL は現在の component 解析対象ではないため、記録前に失敗扱いになる。
+
+### Plan
+
+- [x] `choose_record_url()` を `720x720` variant 厳密選択へ変更し、`sample` へフォールバックしない
+- [x] `component_parse_failed` の原因だった直近投稿パターンで再現確認する
+- [x] `python3 -m compileall app` と実データ spot check の結果を Review に記録する
+
+### Review
+
+- [x] 実装後に記入
+- 原因:
+  - `choose_record_url()` が `_pick_variant()` の最短辺ペナルティを共有していたため、縦長画像では `720x720` より `sample` を選ぶことがあった
+  - `sample-<md5>.jpg` URL は component 解析正規表現の対象外で、`component_parse_failed` として失敗計上されていた
+- 実装:
+  - `app/ingest_posts.py` の `choose_record_url()` を `media_asset.variants` から `type == "720x720"` の URL だけを返す実装へ変更
+  - 埋め込み取得用の `choose_image_url()` には手を入れず、記録URL選定だけを分離した
+- 検証:
+  - `python3 -m compileall app` 成功
+  - Danbooru 最新 200 件の spot check で、修正前に相当した `sample` 起因の `component_parse_failed` が 0 件になったことを確認
+  - 同 spot check の結果は `ok=197`, `no_record_url=3`, `component_parse_failed=0`
+- 未実施:
+  - Windows 側の `database.bat` 実行で同ログ傾向になることの実機確認
