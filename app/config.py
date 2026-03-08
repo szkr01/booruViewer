@@ -36,6 +36,9 @@ class Settings:
     ingest_download_workers_min: int
     ingest_download_workers_max: int
     ingest_download_autotune_interval: int
+    ingest_embed_batch_size: int
+    ingest_embed_max_wait_ms: float
+    ingest_embed_autocast: bool
     ingest_http_max_retries: int
     ingest_http_retry_base_sec: float
     ingest_http_retry_backoff: float
@@ -91,6 +94,9 @@ class SettingsLoader:
         ingest_download_workers_min = int(config.get("ingest_download_workers_min", 2))
         ingest_download_workers_max = int(config.get("ingest_download_workers_max", 16))
         ingest_download_autotune_interval = int(config.get("ingest_download_autotune_interval", 64))
+        ingest_embed_batch_size = int(config.get("ingest_embed_batch_size", 16))
+        ingest_embed_max_wait_ms = float(config.get("ingest_embed_max_wait_ms", 15.0))
+        ingest_embed_autocast = bool(config.get("ingest_embed_autocast", True))
         ingest_http_max_retries = int(config.get("ingest_http_max_retries", 4))
         ingest_http_retry_base_sec = float(config.get("ingest_http_retry_base_sec", 0.6))
         ingest_http_retry_backoff = float(config.get("ingest_http_retry_backoff", 1.8))
@@ -130,6 +136,9 @@ class SettingsLoader:
             ingest_download_workers_min=ingest_download_workers_min,
             ingest_download_workers_max=ingest_download_workers_max,
             ingest_download_autotune_interval=ingest_download_autotune_interval,
+            ingest_embed_batch_size=ingest_embed_batch_size,
+            ingest_embed_max_wait_ms=ingest_embed_max_wait_ms,
+            ingest_embed_autocast=ingest_embed_autocast,
             ingest_http_max_retries=ingest_http_max_retries,
             ingest_http_retry_base_sec=ingest_http_retry_base_sec,
             ingest_http_retry_backoff=ingest_http_retry_backoff,

@@ -50,8 +50,12 @@ class BuildRowStats:
     bytes_downloaded: int
     download_sec: float
     decode_sec: float
+    preprocess_sec: float
+    forward_sec: float
+    transfer_sec: float
     embed_sec: float
     total_sec: float
+    embed_batch_size: int
     reason: str = "ok"
 
 
@@ -93,8 +97,6 @@ class AdaptiveDownloadController:
             target = max(self.min_workers, self.current_workers - 1)
         elif download_avg > max(embed_avg * 1.25, 0.05):
             target = min(self.max_workers, self.current_workers + 1)
-        elif embed_avg > max(download_avg * 1.5, 0.05):
-            target = max(self.min_workers, self.current_workers - 1)
 
         if target != self.current_workers:
             print(
@@ -303,50 +305,113 @@ def build_row_from_post_with_stats(client: httpx.Client, post: dict[str, Any]) -
     downloaded = download_post_with_stats(client, post)
     if downloaded.image is None:
         return None, downloaded.stats
-    return build_row_from_downloaded(downloaded)
+    return build_rows_from_downloaded_batch([downloaded])[0]
 
 
-def build_row_from_downloaded(downloaded: DownloadedPost) -> tuple[IngestRow | None, BuildRowStats]:
-    t0 = perf_counter()
-    if downloaded.image is None or downloaded.comp is None:
-        return None, downloaded.stats
+def _embed_downloaded_batch(downloaded_batch: list[DownloadedPost]) -> tuple[np.ndarray | None, float, float, float]:
+    if not downloaded_batch:
+        return None, 0.0, 0.0, 0.0
+    images = [item.image for item in downloaded_batch if item.image is not None]
+    if len(images) != len(downloaded_batch):
+        return None, 0.0, 0.0, 0.0
+    result = tag_engine.extract_image_features_with_stats(images)
+    if result is None:
+        return None, 0.0, 0.0, 0.0
+    return result.features, result.preprocess_sec, result.forward_sec, result.transfer_sec
 
-    temb0 = perf_counter()
-    feat = tag_engine.extract_image_feature(downloaded.image)
-    embed_sec = perf_counter() - temb0
-    if feat is None or feat.size == 0:
-        return None, BuildRowStats(
-            False,
-            downloaded.stats.bytes_downloaded,
-            downloaded.stats.download_sec,
-            downloaded.stats.decode_sec,
-            embed_sec,
-            perf_counter() - t0,
-            "embed_failed",
+
+def build_rows_from_downloaded_batch(
+    downloaded_batch: list[DownloadedPost],
+) -> list[tuple[int, IngestRow | None, BuildRowStats]]:
+    if not downloaded_batch:
+        return []
+
+    valid_batch = [item for item in downloaded_batch if item.image is not None and item.comp is not None]
+    invalid_results: list[tuple[int, IngestRow | None, BuildRowStats]] = []
+    for item in downloaded_batch:
+        if item.image is None or item.comp is None:
+            invalid_results.append((item.post_id, None, item.stats))
+
+    feats, preprocess_sec, forward_sec, transfer_sec = _embed_downloaded_batch(valid_batch)
+    batch_size = len(valid_batch)
+    if batch_size <= 0:
+        return invalid_results
+
+    per_item_preprocess = preprocess_sec / batch_size
+    per_item_forward = forward_sec / batch_size
+    per_item_transfer = transfer_sec / batch_size
+    per_item_embed = (preprocess_sec + forward_sec + transfer_sec) / batch_size
+    results: list[tuple[int, IngestRow | None, BuildRowStats]] = []
+
+    if feats is None or feats.shape[0] != batch_size:
+        for item in valid_batch:
+            results.append(
+                (
+                    item.post_id,
+                    None,
+                    BuildRowStats(
+                        False,
+                        item.stats.bytes_downloaded,
+                        item.stats.download_sec,
+                        item.stats.decode_sec,
+                        per_item_preprocess,
+                        per_item_forward,
+                        per_item_transfer,
+                        per_item_embed,
+                        item.stats.total_sec + per_item_embed,
+                        batch_size,
+                        "embed_failed",
+                    ),
+                )
+            )
+        return invalid_results + results
+
+    for item, feat in zip(valid_batch, feats, strict=True):
+        emb = np.asarray(feat, dtype=np.float32).reshape(-1)
+        if emb.shape[0] != settings.embedding_dim:
+            results.append(
+                (
+                    item.post_id,
+                    None,
+                    BuildRowStats(
+                        False,
+                        item.stats.bytes_downloaded,
+                        item.stats.download_sec,
+                        item.stats.decode_sec,
+                        per_item_preprocess,
+                        per_item_forward,
+                        per_item_transfer,
+                        per_item_embed,
+                        item.stats.total_sec + per_item_embed,
+                        batch_size,
+                        "embed_dim_mismatch",
+                    ),
+                )
+            )
+            continue
+
+        c1, c2, c3, c4, c5 = item.comp
+        row = IngestRow(post_id=item.post_id, rating=item.rating, c1=c1, c2=c2, c3=c3, c4=c4, c5=c5, emb=emb)
+        results.append(
+            (
+                item.post_id,
+                row,
+                BuildRowStats(
+                    True,
+                    item.stats.bytes_downloaded,
+                    item.stats.download_sec,
+                    item.stats.decode_sec,
+                    per_item_preprocess,
+                    per_item_forward,
+                    per_item_transfer,
+                    per_item_embed,
+                    item.stats.total_sec + per_item_embed,
+                    batch_size,
+                    "ok",
+                ),
+            )
         )
-    emb = feat.reshape(-1).astype(np.float32, copy=False)
-    if emb.shape[0] != settings.embedding_dim:
-        return None, BuildRowStats(
-            False,
-            downloaded.stats.bytes_downloaded,
-            downloaded.stats.download_sec,
-            downloaded.stats.decode_sec,
-            embed_sec,
-            perf_counter() - t0,
-            "embed_dim_mismatch",
-        )
-
-    c1, c2, c3, c4, c5 = downloaded.comp
-    row = IngestRow(post_id=downloaded.post_id, rating=downloaded.rating, c1=c1, c2=c2, c3=c3, c4=c4, c5=c5, emb=emb)
-    return row, BuildRowStats(
-        True,
-        downloaded.stats.bytes_downloaded,
-        downloaded.stats.download_sec,
-        downloaded.stats.decode_sec,
-        embed_sec,
-        perf_counter() - t0,
-        "ok",
-    )
+    return invalid_results + results
 
 
 def download_post_with_stats(client: httpx.Client, post: dict[str, Any]) -> DownloadedPost:
@@ -357,21 +422,21 @@ def download_post_with_stats(client: httpx.Client, post: dict[str, Any]) -> Down
 
     post_id = int(post.get("id", 0) or 0)
     if post_id <= 0:
-        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, perf_counter() - t0, "invalid_id"))
+        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, perf_counter() - t0, 0, "invalid_id"))
     if bool(post.get("is_deleted")):
-        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, perf_counter() - t0, "deleted"))
+        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, perf_counter() - t0, 0, "deleted"))
 
     source_url = choose_image_url(post)
     if not source_url:
-        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, perf_counter() - t0, "no_supported_url"))
+        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, perf_counter() - t0, 0, "no_supported_url"))
 
     record_url = choose_record_url(post)
     if not record_url:
-        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, perf_counter() - t0, "no_record_url"))
+        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, perf_counter() - t0, 0, "no_record_url"))
 
     comp = components_from_record_url(record_url)
     if comp is None:
-        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, perf_counter() - t0, "component_parse_failed"))
+        return DownloadedPost(post_id, 0, None, None, BuildRowStats(False, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, perf_counter() - t0, 0, "component_parse_failed"))
 
     try:
         td0 = perf_counter()
@@ -388,7 +453,11 @@ def download_post_with_stats(client: httpx.Client, post: dict[str, Any]) -> Down
                     perf_counter() - td0,
                     0.0,
                     0.0,
+                    0.0,
+                    0.0,
+                    0.0,
                     perf_counter() - t0,
+                    0,
                     f"http_{img_resp.status_code}",
                 ),
             )
@@ -405,7 +474,7 @@ def download_post_with_stats(client: httpx.Client, post: dict[str, Any]) -> Down
             0,
             None,
             None,
-            BuildRowStats(False, bytes_downloaded, download_sec, decode_sec, 0.0, perf_counter() - t0, "download_or_decode_failed"),
+            BuildRowStats(False, bytes_downloaded, download_sec, decode_sec, 0.0, 0.0, 0.0, 0.0, perf_counter() - t0, 0, "download_or_decode_failed"),
         )
 
     return DownloadedPost(
@@ -413,7 +482,7 @@ def download_post_with_stats(client: httpx.Client, post: dict[str, Any]) -> Down
         rating=rating_to_int(str(post.get("rating", "g"))),
         comp=comp,
         image=img,
-        stats=BuildRowStats(True, bytes_downloaded, download_sec, decode_sec, 0.0, perf_counter() - t0, "downloaded"),
+        stats=BuildRowStats(True, bytes_downloaded, download_sec, decode_sec, 0.0, 0.0, 0.0, 0.0, perf_counter() - t0, 0, "downloaded"),
     )
 
 
@@ -426,14 +495,39 @@ def process_posts_with_stats(
         return []
     downloader = controller or AdaptiveDownloadController()
     results: list[tuple[int, IngestRow | None, BuildRowStats]] = []
+    pending_embed: list[DownloadedPost] = []
+    first_pending_at: float | None = None
+    embed_batch_size = max(1, int(getattr(settings, "ingest_embed_batch_size", 1)))
+    embed_max_wait_sec = max(0.0, float(getattr(settings, "ingest_embed_max_wait_ms", 0.0))) / 1000.0
+
     workers = min(downloader.current_workers, max(1, len(posts)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         future_map = {pool.submit(download_post_with_stats, client, post): post for post in posts}
         for future in as_completed(future_map):
             downloaded = future.result()
-            row, stats = build_row_from_downloaded(downloaded)
-            downloader.observe(stats)
-            results.append((downloaded.post_id, row, stats))
+            if downloaded.image is None or downloaded.comp is None:
+                downloader.observe(downloaded.stats)
+                results.append((downloaded.post_id, None, downloaded.stats))
+                continue
+
+            if not pending_embed:
+                first_pending_at = perf_counter()
+            pending_embed.append(downloaded)
+            should_flush = len(pending_embed) >= embed_batch_size
+            if not should_flush and first_pending_at is not None and embed_max_wait_sec > 0:
+                should_flush = (perf_counter() - first_pending_at) >= embed_max_wait_sec
+            if should_flush:
+                flushed = build_rows_from_downloaded_batch(list(pending_embed))
+                pending_embed.clear()
+                first_pending_at = None
+                for item in flushed:
+                    downloader.observe(item[2])
+                results.extend(flushed)
+    if pending_embed:
+        flushed = build_rows_from_downloaded_batch(list(pending_embed))
+        for item in flushed:
+            downloader.observe(item[2])
+        results.extend(flushed)
     return results
 
 

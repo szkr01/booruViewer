@@ -76,7 +76,11 @@ def main() -> None:
     bytes_downloaded = 0
     download_sec = 0.0
     decode_sec = 0.0
+    preprocess_sec = 0.0
+    forward_sec = 0.0
+    transfer_sec = 0.0
     embed_sec = 0.0
+    embed_batch_total = 0
     processed_for_perf = 0
     metric_every = 25
     state_save_interval_sec = max(1.0, float(getattr(settings, "ingest_state_save_interval_sec", 300.0)))
@@ -156,7 +160,11 @@ def main() -> None:
                     bytes_downloaded += st.bytes_downloaded
                     download_sec += st.download_sec
                     decode_sec += st.decode_sec
+                    preprocess_sec += st.preprocess_sec
+                    forward_sec += st.forward_sec
+                    transfer_sec += st.transfer_sec
                     embed_sec += st.embed_sec
+                    embed_batch_total += st.embed_batch_size
                     processed_for_perf += 1
                     if row is None:
                         if st.reason in _SKIP_REASONS:
@@ -188,7 +196,11 @@ def main() -> None:
                             f"overall={processed_for_perf/elapsed:.2f} img/s "
                             f"api_avg_ms={(page_fetch_sec/max(pages,1))*1000:.1f} "
                             f"dl_avg_ms={(download_sec/max(processed_for_perf,1))*1000:.1f} "
+                            f"pre_avg_ms={(preprocess_sec/max(processed_for_perf,1))*1000:.1f} "
+                            f"fwd_avg_ms={(forward_sec/max(processed_for_perf,1))*1000:.1f} "
+                            f"xfer_avg_ms={(transfer_sec/max(processed_for_perf,1))*1000:.1f} "
                             f"embed_avg_ms={(embed_sec/max(processed_for_perf,1))*1000:.1f} "
+                            f"embed_batch_avg={embed_batch_total/max(processed_for_perf,1):.2f} "
                             f"net={net_mb/max(download_sec,1e-9):.2f} MiB/s "
                             f"skip_reasons={dict(skipped_reasons.most_common(4))} "
                             f"fail_reasons={dict(failure_reasons.most_common(4))}"
@@ -234,7 +246,11 @@ def main() -> None:
         f"overall={processed_for_perf/elapsed:.2f} img/s "
         f"download_avg_ms={(download_sec/max(processed_for_perf,1))*1000:.1f} "
         f"decode_avg_ms={(decode_sec/max(processed_for_perf,1))*1000:.1f} "
+        f"preprocess_avg_ms={(preprocess_sec/max(processed_for_perf,1))*1000:.1f} "
+        f"forward_avg_ms={(forward_sec/max(processed_for_perf,1))*1000:.1f} "
+        f"transfer_avg_ms={(transfer_sec/max(processed_for_perf,1))*1000:.1f} "
         f"embed_avg_ms={(embed_sec/max(processed_for_perf,1))*1000:.1f} "
+        f"embed_batch_avg={embed_batch_total/max(processed_for_perf,1):.2f} "
         f"net_rate={net_mb/max(download_sec,1e-9):.2f}MiB/s "
         f"device={tag_engine.device} "
         f"skip_reasons={dict(skipped_reasons.most_common(8))} "

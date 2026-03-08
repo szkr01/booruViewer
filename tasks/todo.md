@@ -1,5 +1,28 @@
 # Implementation Plan
 
+## Replan (2026-03-08, Ingest GPU Batch Throughput)
+
+- [x] `TagEngine` にバッチ推論 API を追加し、単発推論の内部実装を共有化する
+- [x] `sync_posts` ingest 経路を「ダウンロード並列 + GPUバッチ推論」に再編する
+- [x] 無駄な前処理を削減し、埋め込み計測を preprocess / forward / transfer / batch size まで分解する
+- [x] 設定と README を更新し、静的検証を実施してレビュー欄に記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - `app/tag_engine.py` に `extract_image_features()` / `extract_image_features_with_stats()` を追加し、単画像 API も同じバッチ経路を通すよう整理
+  - `app/ingest_posts.py` を「並列ダウンロード -> 推論キュー -> GPUバッチ埋め込み」に変更し、`ingest_embed_batch_size` または `ingest_embed_max_wait_ms` で flush するよう修正
+  - `download_post_with_stats()` で RGB 変換済みの画像を保持し、`TagEngine._preprocess_image()` 側は非 RGB のときだけ変換するようにして二重 `convert("RGB")` を解消
+  - `AdaptiveDownloadController` の「embed が重いと worker を減らす」分岐を除去し、GPU 律速時に供給を絞らないよう変更
+  - `sync_posts.py` の perf ログに `pre/fwd/xfer/embed_batch_avg` を追加
+  - `config.json` / `app/config.py` / `README.md` に ingest の推論バッチ設定を追加し、`ingest_batch_size` は parquet flush 用であることを明記
+- 検証:
+  - `python3 -m compileall app` 成功
+- 未実施:
+  - 実 GPU 環境での `sync_posts` ベンチ確認
+  - WSL 側 `python3` では `httpx` が未導入のため import 実行確認は未完了
+
 ## Replan (2026-03-08, DB URL Recording Fix)
 
 - [x] 現行 ingestion の URL 選定と DB 記録を分離し、記録側を `720x720` 実 URL 基準へ戻す

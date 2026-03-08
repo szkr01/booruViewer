@@ -30,8 +30,12 @@ setup.bat
 - `parquet_glob`: 既存キャッシュがない場合に取り込むparquetのglob
 - `db_path`, `faiss_index_path`, `vectors_raw_path`: 出力先
 - `ingest_state_save_interval_sec`: state 永続化間隔（デフォルト300秒）。件数基準では保存しません
+- `ingest_batch_size`: 収集済み行を parquet へ flush する単位。GPU 推論バッチサイズではありません
 - `ingest_roll_max_rows`, `ingest_roll_max_mib`: 収集parquetのローテーション条件
 - `ingest_download_workers*`: ダウンロード並列数と自動調整範囲
+- `ingest_embed_batch_size`: 画像特徴抽出を GPU へまとめて投げる推論バッチサイズ
+- `ingest_embed_max_wait_ms`: 推論キューを時間で flush する上限待ち時間
+- `ingest_embed_autocast`: CUDA 推論時に autocast(fp16) を使うか
 - `collector_phase_budget_sec`: 単一 collector が1サイクルで使う時間予算。未完了分は次サイクルで再開
 - `docs/` 配下は参照しません。実データのパスを明示指定してください。
 

@@ -4,6 +4,7 @@ import csv
 import io
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 
 import httpx
 import numpy as np
@@ -12,6 +13,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 import torchvision.transforms.functional as TF
+from contextlib import nullcontext
 
 from .config import settings
 
@@ -21,6 +23,14 @@ class TagRow:
     name: str
     category: int
     count: int
+
+
+@dataclass
+class FeatureBatchResult:
+    features: np.ndarray
+    preprocess_sec: float
+    transfer_sec: float
+    forward_sec: float
 
 
 class TagEngine:
@@ -158,16 +168,51 @@ class TagEngine:
         return (normalized * bias_mult).astype(np.float32)
 
     def extract_image_feature(self, img: Image.Image) -> np.ndarray | None:
-        if self.model is None:
+        feats = self.extract_image_features([img])
+        if feats is None or feats.shape[0] == 0:
+            return None
+        return feats[:1]
+
+    def extract_image_features(self, images: list[Image.Image]) -> np.ndarray | None:
+        result = self.extract_image_features_with_stats(images)
+        if result is None:
+            return None
+        return result.features
+
+    def extract_image_features_with_stats(self, images: list[Image.Image]) -> FeatureBatchResult | None:
+        if self.model is None or not images:
             return None
 
-        tensor = self._preprocess_image(img).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            feat = self.model(tensor)
-        return feat.detach().cpu().numpy().astype(np.float32)
+        t_pre0 = perf_counter()
+        batch = torch.stack([self._preprocess_image(img) for img in images], dim=0)
+        preprocess_sec = perf_counter() - t_pre0
+
+        t_transfer0 = perf_counter()
+        batch = batch.to(self.device, non_blocking=self.device.type == "cuda")
+        transfer_sec = perf_counter() - t_transfer0
+
+        autocast_enabled = self.device.type == "cuda" and bool(settings.ingest_embed_autocast)
+        autocast_ctx = (
+            torch.autocast(device_type="cuda", dtype=torch.float16)
+            if autocast_enabled
+            else nullcontext()
+        )
+        t_forward0 = perf_counter()
+        with torch.inference_mode():
+            with autocast_ctx:
+                feat = self.model(batch)
+        forward_sec = perf_counter() - t_forward0
+        features = feat.detach().float().cpu().numpy().astype(np.float32, copy=False)
+        return FeatureBatchResult(
+            features=features,
+            preprocess_sec=preprocess_sec,
+            transfer_sec=transfer_sec,
+            forward_sec=forward_sec,
+        )
 
     def _preprocess_image(self, img: Image.Image) -> torch.Tensor:
-        img = img.convert("RGB")
+        if img.mode != "RGB":
+            img = img.convert("RGB")
         w, h = img.size
         aspect = w / max(h, 1)
 
