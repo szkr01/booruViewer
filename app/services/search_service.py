@@ -17,9 +17,14 @@ ID_QUERY_RE = re.compile(r"(?:^|\s)id\s*:\s*(\d+)(?:$|\s)", re.IGNORECASE)
 
 
 class SearchService:
+    def _is_rating_allowed(self, rating: int) -> bool:
+        return int(rating) <= settings.rating_threshold
+
     def _to_entries(self, rows: Iterable[dict], score_map: dict[int, float] | None = None) -> list[ImageEntry]:
         entries: list[ImageEntry] = []
         for row in rows:
+            if not self._is_rating_allowed(int(row["rating"])):
+                continue
             post_id = int(row["id"])
             entries.append(
                 ImageEntry(
@@ -35,6 +40,8 @@ class SearchService:
     def _to_ranked_entries(self, ranked_rows: Iterable[tuple[dict, float]]) -> list[ImageEntry]:
         entries: list[ImageEntry] = []
         for row, score in ranked_rows:
+            if not self._is_rating_allowed(int(row["rating"])):
+                continue
             post_id = int(row["id"])
             entries.append(
                 ImageEntry(

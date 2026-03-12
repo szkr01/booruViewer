@@ -908,3 +908,54 @@
   - 同 spot check の結果は `ok=197`, `no_record_url=3`, `component_parse_failed=0`
 - 未実施:
   - Windows 側の `database.bat` 実行で同ログ傾向になることの実機確認
+
+## Replan (2026-03-13, ratingfilter Working Check)
+
+### Plan
+
+- [x] `ratingfilter` に相当する設定と実装箇所を特定する
+- [x] 既存テストとコードパスから、検索結果に rating 制限が反映されるか確認する
+- [x] 必要なら追加の実行確認を行い、Review に結果を記録する
+
+### Review
+
+- [x] 実装後に記入
+- 結論:
+  - 現在の `ratingfilter` は「全体としてはうまく動いていない」。少なくとも recent 一覧では `rating_threshold: 1` を守れていない。
+- 根拠:
+  - [config.json](/mnt/c/Users/korag/Documents/GitHub/booruViewer/config.json#L11) は `rating_threshold` を `1` に設定している
+  - [app/build_index.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/build_index.py#L75) は parquet 取り込み時に `ratings <= settings.rating_threshold` でマスクしている
+  - しかし [app/database.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/database.py#L66) の `get_recent()` には rating 条件がなく、[app/services/search_service.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/services/search_service.py#L64) もそのまま recent 一覧へ返している
+  - 実 DB の spot check では `SELECT id, rating FROM posts ORDER BY id DESC LIMIT 20` の結果に `10916861:3`, `10916860:2`, `10916859:2`, `10916856:3` が含まれていた
+- 補足:
+  - `build_index` は新規 parquet 行を DB/index に入れる時だけ filtering する
+  - 既存 DB の高 rating 行を削除・再同期する処理はなく、`existing_ids()` により既存行はそのまま残る
+  - そのため「新規 build_index 分だけ効く」可能性はあるが、現在のアプリ全体の表示保証にはなっていない
+- 検証:
+  - `rg -n "rating_threshold|get_recent\\(|recent\\(" app tests README.md web_local` で適用箇所を確認
+  - `python3 - <<'PY' ... SELECT id, rating FROM posts ORDER BY id DESC LIMIT 20 ... PY` で recent 上位に `rating > 1` が存在することを確認
+- 制約:
+  - `pytest` は未導入、`python3 -m unittest tests.test_search_service` は `numpy` 不足でこの WSL 環境では未実行
+
+## Replan (2026-03-13, Return-Time Rating Filter)
+
+### Plan
+
+- [x] `SearchService` の返却直前で `rating_threshold` フィルタを適用する
+- [x] recent と vector 検索の両方をカバーする最小テストを追加する
+- [x] 可能な範囲で検証し、Review に結果を記録する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - [app/services/search_service.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/services/search_service.py#L20) に `_is_rating_allowed()` を追加し、`_to_entries()` と `_to_ranked_entries()` の返却直前で `settings.rating_threshold` を超える行を除外するよう変更
+  - これにより recent 一覧と vector 検索結果の両方で、既存 DB に高 rating 行が残っていても API 返却前に落ちる
+- テスト:
+  - [tests/test_search_service.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/tests/test_search_service.py#L54) に recent 用の返却時フィルタテストを追加
+  - [tests/test_search_service.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/tests/test_search_service.py#L112) に vector 検索用の返却時フィルタテストを追加
+- 検証:
+  - `python3 -m compileall app/services/search_service.py tests/test_search_service.py` 成功
+- 制約:
+  - `python3 -m unittest tests.test_search_service` はこの WSL 環境で `numpy` 不足のため未実行
+  - 返却直前で落とす最小変更のため、フィルタ後の件数が `limit` 未満になる場合は補充しない

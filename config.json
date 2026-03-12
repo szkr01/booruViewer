@@ -8,7 +8,7 @@
   "faiss_index_path": "data/faiss.index",
   "vectors_raw_path": "data/vectors_raw.f16",
   "recent_default_limit": 120,
-  "rating_threshold": 3,
+  "rating_threshold": 1,
   "legacy_cache_dirs": [],
   "parquet_glob": "data2/*.parquet",
   "build_state_path": "data/build_state.json",
