@@ -30,6 +30,8 @@ if not logging.getLogger().handlers:
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
+SEARCH_LIMIT_MAX = 100000
+
 
 class _MediaAccessLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -136,7 +138,7 @@ async def search_images(
             except Exception:
                 continue
 
-    limited = max(1, min(limit, 500))
+    limited = max(1, min(limit, SEARCH_LIMIT_MAX))
     clamped_offset = max(0, offset)
     local_results, mode, reason = search_service.search_with_mode(
         query_text=query_text,

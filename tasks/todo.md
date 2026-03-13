@@ -1,3 +1,21 @@
+# Replan (2026-03-14, Search Limit Clamp Fix)
+
+- [x] `/API/search` の `limit` clamp 箇所とフロント送信値を確認し、原因を確定する
+- [x] API の `limit` 上限を `100000` に引き上げ、指定値が検索処理へ渡るよう修正する
+- [x] 回帰テストと静的検証を実行し、review を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - [app/main.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/main.py#L33) に `SEARCH_LIMIT_MAX = 100000` を追加し、`/API/search` の `limit` clamp を `500` からこの定数へ変更
+  - [tests/test_main.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/tests/test_main.py#L127) を追加し、`limit=1234` がそのまま検索サービスへ渡ることと、`100001` が `100000` に clamp されることを検証
+- 原因:
+  - [app/main.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/main.py#L141) で `limited = max(1, min(limit, 500))` と固定されており、フロントやリクエストがそれ以上の `limit` を送っても API 層で `500` に丸められていた
+- 検証:
+  - `python3 -m unittest tests.test_main` 成功
+  - `python3 -m compileall app tests` 成功
+
 # Replan (2026-03-09, app.bat Missing Dependency Startup Failure)
 
 - [x] `app.bat` と依存定義を確認し、`httpx` 未検出の原因を特定する
