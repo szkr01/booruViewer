@@ -1,3 +1,23 @@
+# Replan (2026-03-16, web_local Download Uses Thumbnail)
+
+- [x] `web_local/index.html` のダウンロード関連実装を確認し、サムネイル URL を保存してしまう原因を特定する
+- [x] `downloadImage()` が詳細モーダルと同じ画像 URL を使うよう最小差分で修正する
+- [x] 影響範囲を確認し、review を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - [web_local/index.html](/mnt/c/Users/korag/Documents/GitHub/booruViewer/web_local/index.html) に `resolveDetailImageUrl()` を追加し、詳細モーダルで確定した画像 URL を `image._detailImageUrl` として共有するよう変更
+  - [web_local/index.html](/mnt/c/Users/korag/Documents/GitHub/booruViewer/web_local/index.html) の `openImageDetail()` と `downloadImage()` を同じ詳細表示 URL 解決経路に揃え、モーダル表示中は `detailImage.src` をそのままダウンロードに再利用するよう変更
+- 原因:
+  - [web_local/index.html](/mnt/c/Users/korag/Documents/GitHub/booruViewer/web_local/index.html) の `downloadImage()` は詳細モーダルで実際に使った URL を参照せず個別に URL を解決しており、一覧側の `image.media_url` に引きずられてサムネイル画質を保存する経路が残っていた
+- 検証:
+  - `git diff -- web_local/index.html tasks/todo.md` で URL 解決の共通化とダウンロード経路の差分のみであることを確認
+  - `nl -ba web_local/index.html | sed -n '888,1085p'` で詳細モーダルとダウンロードが同じ `resolveDetailImageUrl()` を使い、表示中は `detailImage.src` を優先することを確認
+- 未実施:
+  - ブラウザ上での手動ダウンロード確認
+
 # Replan (2026-03-14, Search Limit Clamp Fix)
 
 - [x] `/API/search` の `limit` clamp 箇所とフロント送信値を確認し、原因を確定する

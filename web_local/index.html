@@ -910,6 +910,18 @@
             return directMediaUrl;
         }
 
+        async function resolveDetailImageUrl(image, danbooruData = null) {
+            if (image?._detailImageUrl) {
+                return image._detailImageUrl;
+            }
+
+            const detailUrl = await resolveDisplayImageUrl(image, true, danbooruData);
+            if (detailUrl) {
+                image._detailImageUrl = detailUrl;
+            }
+            return detailUrl;
+        }
+
         function ensureCardImageObserver() {
             if (state.cardImageObserver) return state.cardImageObserver;
 
@@ -1027,13 +1039,14 @@
                 renderDanbooruInfo(image.url, danbooruData);
             }
 
-            const detailUrl = await resolveDisplayImageUrl(image, true, danbooruData);
+            const detailUrl = await resolveDetailImageUrl(image, danbooruData);
             if (!detailUrl) {
                 els.modalLoader.classList.add('hidden');
                 els.detailImage.removeAttribute('src');
                 return;
             }
 
+            els.detailImage.dataset.imageId = String(image.id);
             els.detailImage.src = detailUrl;
             els.detailImage.onload = () => {
                 els.modalLoader.classList.add('hidden');
@@ -1051,7 +1064,9 @@
         // --- Logic: Image Download ---
         async function downloadImage(image) {
             showToast('Download starting...');
-            const downloadUrl = await resolveDisplayImageUrl(image, true);
+            const downloadUrl = els.detailImage.dataset.imageId === String(image.id) && els.detailImage.src
+                ? els.detailImage.src
+                : await resolveDetailImageUrl(image);
             if (!downloadUrl) {
                 showToast('Download Error');
                 setTimeout(() => {
