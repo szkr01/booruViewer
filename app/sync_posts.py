@@ -97,6 +97,62 @@ def _enqueue_range(state: BuildState, pending_range: PendingRange) -> bool:
     return True
 
 
+def _latest_gap_range(latest_head_id: int, db_max_id: int, gap_threshold: int) -> PendingRange | None:
+    if (int(latest_head_id) - int(db_max_id)) < int(gap_threshold):
+        return None
+    return PendingRange(
+        upper_id=int(latest_head_id),
+        lower_id=max(1, int(db_max_id) + 1),
+        cursor_id=int(latest_head_id) + 1,
+        source="latest",
+        status="active",
+    ).normalized()
+
+
+def _prioritize_latest_range(
+    state: BuildState,
+    *,
+    latest_head_id: int,
+    db_max_id: int,
+    gap_threshold: int,
+) -> bool:
+    latest_range = _latest_gap_range(latest_head_id, db_max_id, gap_threshold)
+    if latest_range is None:
+        return False
+
+    matched_existing: PendingRange | None = None
+    remaining: list[PendingRange] = []
+    for pending_range in state.pending_ranges:
+        if matched_existing is None and _range_key(pending_range) == _range_key(latest_range):
+            matched_existing = pending_range
+            continue
+        remaining.append(pending_range)
+
+    chosen = matched_existing or latest_range
+    chosen = PendingRange(
+        upper_id=chosen.upper_id,
+        lower_id=chosen.lower_id,
+        cursor_id=chosen.cursor_id,
+        source="latest",
+        status="active",
+    )
+    reordered = [chosen]
+    reordered.extend(
+        PendingRange(
+            upper_id=pending_range.upper_id,
+            lower_id=pending_range.lower_id,
+            cursor_id=pending_range.cursor_id,
+            source=pending_range.source,
+            status="pending",
+        )
+        for pending_range in remaining
+    )
+
+    changed = state.pending_ranges != reordered
+    state.pending_ranges = reordered
+    return changed
+
+
 def _activate_next_range(state: BuildState) -> PendingRange | None:
     if not state.pending_ranges:
         return None
@@ -130,17 +186,13 @@ def _plan_pending_ranges(
     probe_limit: int = 1,
 ) -> int:
     planned = 0
-    if (latest_head_id - db_max_id) >= gap_threshold:
-        if _enqueue_range(
-            state,
-            PendingRange(
-                upper_id=int(latest_head_id),
-                lower_id=max(1, int(db_max_id) + 1),
-                cursor_id=int(latest_head_id) + 1,
-                source="latest",
-            ),
-        ):
-            planned += 1
+    if _prioritize_latest_range(
+        state,
+        latest_head_id=latest_head_id,
+        db_max_id=db_max_id,
+        gap_threshold=gap_threshold,
+    ):
+        planned += 1
 
     if len(state.pending_ranges) > 0:
         return planned
@@ -271,6 +323,19 @@ def main() -> None:
                         f"after {max_runtime_sec:.1f}s"
                     )
                     break
+                if _prioritize_latest_range(
+                    state,
+                    latest_head_id=latest_head_id,
+                    db_max_id=db_max_id,
+                    gap_threshold=gap_threshold,
+                ):
+                    _save_state_if_needed()
+                    print(
+                        "sync_posts range_prioritize: "
+                        f"pending_ranges={len(state.pending_ranges)} "
+                        f"latest_upper={latest_head_id} latest_lower={max(1, db_max_id + 1)}"
+                    )
+                    found_range = True
                 if not state.pending_ranges:
                     tp0 = perf_counter()
                     planned = _plan_pending_ranges(
@@ -320,12 +385,26 @@ def main() -> None:
                     page_ids = [int(p.get("id", 0) or 0) for p in posts if int(p.get("id", 0) or 0) > 0]
                     if not page_ids:
                         break
+                    page_upper = max(page_ids)
+                    page_lower = min(page_ids)
 
                     pending_posts = [
                         post
                         for post in posts
                         if active_range.lower_id <= int(post.get("id", 0) or 0) <= active_range.upper_id
                     ]
+                    pending_ids = [int(post.get("id", 0) or 0) for post in pending_posts if int(post.get("id", 0) or 0) > 0]
+                    pending_upper = max(pending_ids) if pending_ids else None
+                    pending_lower = min(pending_ids) if pending_ids else None
+
+                    print(
+                        "sync_posts page_fetch: "
+                        f"cursor={cursor} "
+                        f"page_range={page_upper}..{page_lower} "
+                        f"pending_range={pending_upper if pending_upper is not None else '-'}.."
+                        f"{pending_lower if pending_lower is not None else '-'} "
+                        f"pending_posts={len(pending_posts)}"
+                    )
 
                     for post_id, row, st in process_posts_with_stats(client, pending_posts, download_controller):
                         bytes_downloaded += st.bytes_downloaded

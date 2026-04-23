@@ -997,3 +997,24 @@
 - 制約:
   - `python3 -m unittest tests.test_search_service` はこの WSL 環境で `numpy` 不足のため未実行
   - 返却直前で落とす最小変更のため、フィルタ後の件数が `limit` 未満になる場合は補充しない
+
+# Replan (2026-04-23, Latest Sync Starved By Pending Probe Range)
+
+- [x] `build_state.json` と `sync_posts` の pending range 処理を確認し、最新IDが止まる原因を特定する
+- [x] 古い `probe` range が残っていても最新差分 range を優先するよう collector を修正する
+- [x] 回帰テストと静的検証を実行し、review を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 原因:
+  - `data/build_state.json` に `source=probe` の広い旧区間 (`5784529..1`) が `active` のまま残っていた
+  - `app/sync_posts.py` は pending range が1件でも存在すると最新差分の planning を通らず、先頭の古い `probe` を消化し続けるため、`latest_head=11223105` でも `db_max_id=10916872` の差分が永続的に後回しになっていた
+- 実装:
+  - `app/sync_posts.py` に最新 gap を先頭へ昇格させる `_prioritize_latest_range()` を追加
+  - 既に同じ最新区間が queue 内にある場合はその `cursor_id` を維持したまま先頭へ移動し、`source=latest` に正規化
+  - 先頭から外れた旧区間は `pending` に戻すため、古い backfill state を捨てずに新着追従を優先できるようにした
+  - `tests/test_sync_posts.py` を追加し、今回の再現状態と「既存 latest 進捗を潰さない」ケースを固定
+- 検証:
+  - `python -m unittest tests.test_sync_posts` 成功
+  - `python -m compileall app tests` 成功
