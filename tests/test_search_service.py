@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import numpy as np
+
 from app.services.search_service import SearchService
 
 
@@ -21,11 +23,14 @@ class _FakeArray:
 
 
 class _FakeVector:
+    def __init__(self, dim: int = 1024):
+        self._values = np.zeros((1, dim), dtype=np.float32)
+
     def astype(self, *_args, **_kwargs):
-        return self
+        return self._values.astype(*_args, **_kwargs)
 
     def reshape(self, *_args, **_kwargs):
-        return self
+        return self._values.reshape(*_args, **_kwargs)
 
 
 class _FakeSearchResult:

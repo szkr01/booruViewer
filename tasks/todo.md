@@ -1,3 +1,28 @@
+# Replan (2026-05-07, Mobile Direct media_url Display)
+
+- [x] `web_local/index_mobile.html` の `/API/media` / `?size=256x256` 依存箇所を特定する
+- [x] 検索結果を `media_url` 付き entry として保持し、一覧・詳細・隣接プリロード・参照追加を direct `media_url` に統一する
+- [x] 一覧 canvas を中央クロップ描画に変更し、詳細ビューは全体表示を維持する
+- [x] 検証を実行し、review を記入する
+
+### Review
+
+- [x] 実装後に記入
+- 実装:
+  - [web_local/index_mobile.html](/mnt/c/Users/korag/Documents/GitHub/booruViewer/web_local/index_mobile.html) の検索結果保持を `id` だけから `media_url` を含む entry 保持へ変更
+  - 一覧 canvas は `media_url` を読み込み、`drawImageCover()` で中央クロップ描画するよう変更
+  - 詳細画像、前後ゴースト、隣接プリロード、FAB の参照追加 Blob 取得をすべて direct `media_url` に統一
+  - `CONFIG.thumbSize` と `?size=256x256` 前提、server-side thumbnail optimization 文言を削除
+- 検証:
+  - `rg -n "/API/media|thumbSize|256x256" web_local/index_mobile.html` は該当なし
+  - `node -e "... new Function(script) ..."` で `index_mobile.html` の最終 script 構文確認成功
+  - `git diff --check -- web_local/index_mobile.html tasks/todo.md` 成功
+  - 起動中の `http://localhost:8002/API/search` で `media_url` が `https://cdn.donmai.us/720x720/...` として返ることを確認
+  - `http://localhost:8002/app/index_mobile.html` の配信内容に旧 `/API/media` / `thumbSize` / `256x256` が含まれないことを確認
+- 未実施:
+  - ブラウザ DevTools 上での実リクエスト確認
+  - PowerShell からの CDN 直 GET は 403 だったため、画像表示の実画面確認は未実施
+
 # Replan (2026-03-16, web_local Download Uses Thumbnail)
 
 - [x] `web_local/index.html` のダウンロード関連実装を確認し、サムネイル URL を保存してしまう原因を特定する
@@ -1018,3 +1043,37 @@
 - 検証:
   - `python -m unittest tests.test_sync_posts` 成功
   - `python -m compileall app tests` 成功
+
+# Plan (2026-05-07, Mobile Search 100k SQLite Variables)
+
+### Problem Statement
+
+- `web_local/index_mobile.html` は検索 limit を最大 `100000` にしている。
+- `/api/search` は `SEARCH_LIMIT_MAX = 100000` まで受け付けるため、バックエンド側も 10万件検索を想定している。
+- しかし vector 検索後の DB 解決で `WHERE vec_idx IN (?, ?, ...)` に最大 10万個の bind 変数を渡し、SQLite の変数上限を超えて `sqlite3.OperationalError: too many SQL variables` が発生している。
+
+### Plan
+
+- [x] `get_posts_by_ids()` と `get_posts_by_vec_idxs()` を chunk 処理に変更し、SQLite 変数上限に依存しないようにする
+- [x] 10万件入力でも例外にならない回帰テストを追加する
+- [x] 既存検索サービスのテストを実行し、構文確認も行う
+- [x] 実装と検証結果を Review に記録する
+
+### Review
+
+- [x] 実装後に記入
+- 原因:
+  - mobile UI と `/API/search` は `limit=100000` を許可しているが、DB 解決が 10万個の値を単一 `IN (...)` に bind していた
+  - SQLite の変数上限を超えるため、vector 検索後の `get_posts_by_vec_idxs()` で `too many SQL variables` が発生していた
+- 実装:
+  - [app/database.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/app/database.py) の `get_posts_by_ids()` / `get_posts_by_vec_idxs()` を `chunk_size=900` の分割 query に変更
+  - post_id index と vec_idx index のどちらの検索モードでも 10万件 limit に対応
+  - [tests/test_database.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/tests/test_database.py) を追加し、10万値 lookup の回帰テストを固定
+  - [tests/test_search_service.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/tests/test_search_service.py) の fake vector を実 NumPy 配列にして、実依存環境でも検索テストが通るよう修正
+  - [tests/test_main.py](/mnt/c/Users/korag/Documents/GitHub/booruViewer/tests/test_main.py) は依存が揃っている環境では import stub を入れないようにし、`unittest discover` で後続テストを汚染しないよう修正
+- 検証:
+  - `.\.venv\Scripts\python.exe -m unittest tests.test_database tests.test_search_service` 成功
+  - `.\.venv\Scripts\python.exe -m unittest discover -s tests` 成功
+  - `.\.venv\Scripts\python.exe -m compileall app tests` 成功
+- 補足:
+  - システム Python の `python -m unittest ...` は `numpy` 未導入のため `tests.test_search_service` の import で失敗した。プロジェクト `.venv` では成功。

@@ -84,29 +84,37 @@ class Database:
             )
             return cursor.fetchone()
 
-    def get_posts_by_ids(self, post_ids: list[int]) -> dict[int, sqlite3.Row]:
+    def get_posts_by_ids(self, post_ids: list[int], chunk_size: int = 900) -> dict[int, sqlite3.Row]:
         if not post_ids:
             return {}
 
-        placeholders = ",".join("?" for _ in post_ids)
+        result: dict[int, sqlite3.Row] = {}
         with self.connection() as conn:
-            cursor = conn.execute(
-                f"SELECT id, rating, c1, c2, c3, c4, c5, vec_idx FROM posts WHERE id IN ({placeholders})",
-                post_ids,
-            )
-            return {int(row["id"]): row for row in cursor.fetchall()}
+            for start in range(0, len(post_ids), chunk_size):
+                chunk = post_ids[start:start + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"SELECT id, rating, c1, c2, c3, c4, c5, vec_idx FROM posts WHERE id IN ({placeholders})",
+                    chunk,
+                )
+                result.update({int(row["id"]): row for row in cursor.fetchall()})
+        return result
 
-    def get_posts_by_vec_idxs(self, vec_idxs: list[int]) -> dict[int, sqlite3.Row]:
+    def get_posts_by_vec_idxs(self, vec_idxs: list[int], chunk_size: int = 900) -> dict[int, sqlite3.Row]:
         if not vec_idxs:
             return {}
 
-        placeholders = ",".join("?" for _ in vec_idxs)
+        result: dict[int, sqlite3.Row] = {}
         with self.connection() as conn:
-            cursor = conn.execute(
-                f"SELECT id, rating, c1, c2, c3, c4, c5, vec_idx FROM posts WHERE vec_idx IN ({placeholders})",
-                vec_idxs,
-            )
-            return {int(row["vec_idx"]): row for row in cursor.fetchall()}
+            for start in range(0, len(vec_idxs), chunk_size):
+                chunk = vec_idxs[start:start + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = conn.execute(
+                    f"SELECT id, rating, c1, c2, c3, c4, c5, vec_idx FROM posts WHERE vec_idx IN ({placeholders})",
+                    chunk,
+                )
+                result.update({int(row["vec_idx"]): row for row in cursor.fetchall()})
+        return result
 
     def count(self) -> int:
         with self.connection() as conn:

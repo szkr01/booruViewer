@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import sys
 import types
 import unittest
@@ -9,6 +10,10 @@ from unittest.mock import patch
 
 
 def _install_main_import_stubs() -> None:
+    required_modules = ("fastapi", "httpx", "numpy", "uvicorn", "PIL")
+    if all(importlib.util.find_spec(name) is not None for name in required_modules):
+        return
+
     if "fastapi" in sys.modules:
         return
 

@@ -7,7 +7,7 @@
 
 	<!-- REQUIRED META DATA -->
 	<title>Helix Gallery V4 - Inertia & Swipe</title>
-	<meta name="description" content="Infinite spiral gallery with server-side thumbnail optimization">
+	<meta name="description" content="Infinite spiral gallery using direct media URLs">
 	<meta name="page:icon" content="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/svgs/solid/infinity.svg">
 	<meta name="page:color" content="#4f46e5">
 
@@ -439,11 +439,10 @@
 		const CONFIG = {
 			baseCellSize: 180,
 			gap: 2,
-			zoomMin: 0.3,
-			zoomMax: 1.0,
-			initialZoom: 0.6,
-			renderBuffer: 1.5,
-			thumbSize: '256x256' // Matches server-side optimization
+			zoomMin: 1,
+			zoomMax: 2.5,
+			initialZoom: 1,
+			renderBuffer: 1.5
 		};
 
 		// --- Core State ---
@@ -477,6 +476,40 @@
 			m -= t;
 			if (n >= m - t) return { x: -k + (m - n), y: k };
 			return { x: k, y: k - (m - n - t) };
+		}
+
+		function isDirectMediaUrl(url) {
+			const legacyMediaPath = ['/API', 'media'].join('/') + '/';
+			return typeof url === 'string'
+				&& /^https?:\/\//.test(url)
+				&& !url.includes(legacyMediaPath);
+		}
+
+		function getMediaUrl(image) {
+			return isDirectMediaUrl(image?.media_url) ? image.media_url : null;
+		}
+
+		function drawImageCover(context, image, dx, dy, dw, dh) {
+			const sw = image.naturalWidth || image.width;
+			const sh = image.naturalHeight || image.height;
+			if (!sw || !sh) return;
+
+			const sourceAspect = sw / sh;
+			const destAspect = dw / dh;
+			let sx = 0;
+			let sy = 0;
+			let sWidth = sw;
+			let sHeight = sh;
+
+			if (sourceAspect > destAspect) {
+				sWidth = sh * destAspect;
+				sx = (sw - sWidth) / 2;
+			} else {
+				sHeight = sw / destAspect;
+				sy = (sh - sHeight) / 2;
+			}
+
+			context.drawImage(image, sx, sy, sWidth, sHeight, dx, dy, dw, dh);
 		}
 
 		// --- Gallery Canvas Engine ---
@@ -535,21 +568,30 @@
 					ctx.fillStyle = '#0f0f12';
 					ctx.fillRect(sx - sSize / 2, sy - sSize / 2, sSize, sSize);
 
-					if (!imgData.loading) {
+					if (!imgData.loading && !imgData.loadFailed) {
 						imgData.loading = true;
 						const img = new Image();
-						// Request optimized thumbnail
-						img.src = `${API_BASE}/API/media/${imgData.id}?size=${CONFIG.thumbSize}`;
 						img.onload = () => {
 							imgData.imgObj = img;
 							imgData.loaded = true;
 							imgData.loading = false;
 							requestAnimationFrame(render);
 						};
-						img.onerror = () => { imgData.loading = false; };
+						img.onerror = () => {
+							imgData.loading = false;
+							imgData.loadFailed = true;
+							requestAnimationFrame(render);
+						};
+						const mediaUrl = getMediaUrl(imgData);
+						if (!mediaUrl) {
+							imgData.loadFailed = true;
+							imgData.loading = false;
+						} else {
+							img.src = mediaUrl;
+						}
 					}
 					if (sSize > 40) {
-						ctx.fillStyle = '#333';
+						ctx.fillStyle = imgData.loadFailed ? '#7f1d1d' : '#333';
 						ctx.font = `bold ${10 * zoom}px monospace`;
 						ctx.textAlign = 'center';
 						ctx.textBaseline = 'middle';
@@ -560,9 +602,7 @@
 					const dy = sy - sSize / 2;
 					const dSize = sSize;
 
-					// No need for complex aspect ratio calc here
-					// Draw entire source image into destination rect
-					ctx.drawImage(imgData.imgObj, 0, 0, 256, 256, dx, dy, dSize, dSize);
+					drawImageCover(ctx, imgData.imgObj, dx, dy, dSize, dSize);
 				}
 			}
 		}
@@ -1113,8 +1153,11 @@
 						return prefix ? [[prefix, 0, 0]] : [];
 					} catch { return []; }
 				},
-			async getBlob(id) {
-				const res = await fetch(`${API_BASE}/API/media/${id}`);
+			async getBlob(image) {
+				const mediaUrl = getMediaUrl(image);
+				if (!mediaUrl) throw new Error('No direct media URL');
+				const res = await fetch(mediaUrl);
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
 				return await res.blob();
 			}
 		};
@@ -1168,7 +1211,16 @@
 				api.search({ text, images: state.searchRefs }, limit).then(results => {
 					state.images = results.map((entry, idx) => {
 						const c = getSpiralCoord(idx);
-						return { id: entry.id || entry, gx: c.x, gy: c.y, loaded: false, loading: false };
+						const image = typeof entry === 'object' && entry !== null ? entry : { id: entry };
+						return {
+							...image,
+							id: String(image.id),
+							gx: c.x,
+							gy: c.y,
+							loaded: false,
+							loading: false,
+							loadFailed: false
+						};
 					});
 					ui.setStatus(`${results.length} RESULTS`);
 					app.resetView();
@@ -1241,13 +1293,13 @@
 			for (let i = 1; i <= range; i++) {
 				// Next
 				if (index + i < state.images.length) {
-					const id = state.images[index + i].id;
-					new Image().src = `${API_BASE}/API/media/${id}`;
+					const mediaUrl = getMediaUrl(state.images[index + i]);
+					if (mediaUrl) new Image().src = mediaUrl;
 				}
 				// Prev
 				if (index - i >= 0) {
-					const id = state.images[index - i].id;
-					new Image().src = `${API_BASE}/API/media/${id}`;
+					const mediaUrl = getMediaUrl(state.images[index - i]);
+					if (mediaUrl) new Image().src = mediaUrl;
 				}
 			}
 		}
@@ -1284,35 +1336,63 @@
 				const nextImg = document.getElementById('detail-next-image');
 
 				document.getElementById('detail-id').innerText = imgData.id;
+				const mediaUrl = getMediaUrl(imgData);
 
 				// Reset Main Image State
 				loader.classList.remove('hidden');
 				img.classList.add('opacity-0');
 				thumb.classList.remove('opacity-0');
-				thumb.src = `${API_BASE}/API/media/${imgData.id}?size=${CONFIG.thumbSize}`;
+				thumb.removeAttribute('src');
+				img.removeAttribute('src');
+				if (mediaUrl) {
+					thumb.src = mediaUrl;
+				} else {
+					thumb.classList.add('opacity-0');
+					loader.classList.add('hidden');
+					ui.toast('Media URL missing', true);
+				}
 
 				// Load Main High Res
 				const hiRes = new Image();
-				hiRes.src = `${API_BASE}/API/media/${imgData.id}`;
 				hiRes.onload = () => {
 					img.src = hiRes.src;
 					img.classList.remove('opacity-0');
 					thumb.classList.add('opacity-0');
 					loader.classList.add('hidden');
 				};
+				hiRes.onerror = () => {
+					thumb.classList.add('opacity-0');
+					loader.classList.add('hidden');
+					ui.toast('Media failed to load', true);
+				};
+				if (mediaUrl) hiRes.src = mediaUrl;
 
 				// Set Neighbors (Ghost Images)
 				if (index > 0) {
-					prevImg.src = `${API_BASE}/API/media/${state.images[index - 1].id}`;
-					prevImg.style.display = 'block';
+					const prevUrl = getMediaUrl(state.images[index - 1]);
+					if (prevUrl) {
+						prevImg.src = prevUrl;
+						prevImg.style.display = 'block';
+					} else {
+						prevImg.removeAttribute('src');
+						prevImg.style.display = 'none';
+					}
 				} else {
+					prevImg.removeAttribute('src');
 					prevImg.style.display = 'none';
 				}
 
 				if (index < state.images.length - 1) {
-					nextImg.src = `${API_BASE}/API/media/${state.images[index + 1].id}`;
-					nextImg.style.display = 'block';
+					const nextUrl = getMediaUrl(state.images[index + 1]);
+					if (nextUrl) {
+						nextImg.src = nextUrl;
+						nextImg.style.display = 'block';
+					} else {
+						nextImg.removeAttribute('src');
+						nextImg.style.display = 'none';
+					}
 				} else {
+					nextImg.removeAttribute('src');
 					nextImg.style.display = 'none';
 				}
 
@@ -1362,7 +1442,7 @@
 				if (!state.currentId) return;
 				ui.toast('Downloading...');
 				try {
-					const blob = await api.getBlob(state.currentId);
+					const blob = await api.getBlob(state.images[state.detail.index]);
 					searchManager.addRef(blob);
 					ui.closeDetailModal();
 					ui.openSearchModal();
